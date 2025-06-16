@@ -74,7 +74,7 @@ function InteractiveSessionContent() {
   const isFinalizingRef = useRef(false); // Para asegurar que stopAndFinalizeSession no se llame varias veces
   const localUserStreamRef = useRef<MediaStream | null>(null); // Referencia al stream de la cámara del usuario
   const [hasUserMediaPermission, setHasUserMediaPermission] = useState(false); // Nuevo: para habilitar botones de inicio
-  // --- FIN VARIABLES ---
+  // --- FIN NUEVAS VARIABLES ---
 
   // Function to stop local recording (user camera)
   const stopUserCameraRecording = useCallback(() => {
@@ -106,6 +106,9 @@ function InteractiveSessionContent() {
         recordedChunks.current = [];
         recorder.ondataavailable = (event) => {
           if (event.data.size > 0) recordedChunks.current.push(event.data);
+          // --- LOG DE DIAGNÓSTICO ---
+          console.log(`🎥 MediaRecorder: ondataavailable - chunk size: ${event.data.size}`);
+          // --- FIN LOG ---
         };
         recorder.onerror = (event) => {
             console.error("MediaRecorder error:", event);
@@ -113,6 +116,9 @@ function InteractiveSessionContent() {
         recorder.start();
         mediaRecorderRef.current = recorder;
         console.log("🎥 Grabación iniciada del usuario (MediaRecorder).");
+        // --- LOG DE DIAGNÓSTICO ---
+        console.log(`🎥 MediaRecorder state after start: ${recorder.state}`);
+        // --- FIN LOG ---
       } catch (error) {
           console.error("Failed to start MediaRecorder:", error);
       }
@@ -134,16 +140,35 @@ function InteractiveSessionContent() {
     stopUserCameraRecording(); // Stop user camera and local recorder
 
     let videoBlob: Blob | null = null;
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+        // Forcibly stop the recorder if it's still recording before creating blob
+        await new Promise<void>(resolve => {
+            mediaRecorderRef.current!.onstop = () => {
+                console.log("MediaRecorder was forced stopped before blob creation.");
+                resolve();
+            };
+            mediaRecorderRef.current!.stop();
+        });
+    }
+
     if (recordedChunks.current.length > 0) {
         videoBlob = new Blob(recordedChunks.current, { type: "video/webm" });
+        // --- LOG DE DIAGNÓSTICO ---
+        console.log(`✅ Video Blob created. Size: ${videoBlob.size} bytes`);
+        // --- FIN LOG ---
         recordedChunks.current = [];
     } else {
-        console.warn("No recorded video chunks available to finalize.");
+        console.warn("No recorded video chunks available to finalize. Video Blob will be null.");
     }
 
     const userTranscript = (messageHistory || []).filter(msg => msg.sender === MessageSender.CLIENT).map(msg => msg.content).join('\n');
     const avatarTranscript = (messageHistory || []).filter(msg => msg.sender === MessageSender.AVATAR).map(msg => msg.content).join('\n');
     const duration = 480 - recordingTimer;
+
+    // --- LOG DE DIAGNÓSTICO ---
+    console.log(`📊 Transcripción del Usuario (longitud: ${userTranscript.length}): '${userTranscript.substring(0, 100)}...'`);
+    console.log(`📊 Transcripción del Avatar (longitud: ${avatarTranscript.length}): '${avatarTranscript.substring(0, 100)}...'`);
+    // --- FIN LOG ---
 
     const flaskApiUrl = process.env.NEXT_PUBLIC_FLASK_API_URL;
 
@@ -187,7 +212,7 @@ function InteractiveSessionContent() {
         videoFormData.append('name', name || 'unknown');
         videoFormData.append('email', email || 'unknown');
 
-        console.log("Attempting to upload recording...");
+        console.log("Attempting to upload recording to Flask...");
         const uploadRes = await fetch(`${flaskApiUrl}/upload_video`, {
           method: "POST",
           body: videoFormData,
@@ -196,19 +221,22 @@ function InteractiveSessionContent() {
         if (uploadRes.ok) {
           const uploadData = await uploadRes.json();
           videoS3Key = uploadData.s3_object_key;
-          console.log("✅ Grabación enviada con éxito. S3 Key:", videoS3Key);
+          // --- LOG DE DIAGNÓSTICO ---
+          console.log("✅ Flask /upload_video success. S3 Key returned:", videoS3Key);
+          // --- FIN LOG ---
         } else {
           const errorText = await uploadRes.text();
-          console.error("❌ Error al subir grabación:", uploadRes.status, errorText);
+          console.error("❌ Error al subir grabación a Flask /upload_video:", uploadRes.status, errorText);
           alert("⚠️ Problema al subir el video. Consulta la consola para más detalles.");
         }
       } else {
-        console.warn("No video blob to upload.");
+        console.warn("No video blob to upload, skipping /upload_video call.");
         await updateSimulatedProgress("Saltando subida de video (sin video)...", 30);
       }
 
       await updateSimulatedProgress("Enviando registro de sesión para análisis...", 60);
 
+      console.log("Attempting to send session log to Flask /log_full_session...");
       const sessionLogRes = await fetch(`${flaskApiUrl}/log_full_session`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -219,22 +247,22 @@ function InteractiveSessionContent() {
           conversation: userTranscript,
           avatar_transcript: avatarTranscript,
           duration: duration,
-          video_object_key: videoS3Key
+          video_object_key: videoS3Key // Pass the S3 key obtained from /upload_video
         })
       });
 
       if (sessionLogRes.ok) {
         const sessionLogData = await sessionLogRes.json();
-        console.log("Session processing initiated:", sessionLogData);
+        console.log("✅ Flask /log_full_session success. Response:", sessionLogData);
         await updateSimulatedProgress("Análisis en curso...", 90);
       } else {
         const errorText = await sessionLogRes.text();
-        console.error("❌ Error logging session:", sessionLogRes.status, errorText);
+        console.error("❌ Error al registrar sesión a Flask /log_full_session:", sessionLogRes.status, errorText);
         alert("⚠️ Error al registrar la sesión para análisis. Consulta la consola para más detalles.");
       }
 
     } catch (err) {
-      console.error("❌ Error en la solicitud de subida o registro:", err);
+      console.error("❌ Error general en la solicitud de subida o registro:", err);
       alert("❌ Error de red durante el proceso de finalización de la sesión.");
     } finally {
       await updateSimulatedProgress("Redirigiendo al Dashboard...", 100);
@@ -261,30 +289,29 @@ function InteractiveSessionContent() {
                 frameRate: { ideal: 15, max: 15 }
             }
         });
-        localUserStreamRef.current = stream; // Guardar el stream en la referencia
+        localUserStreamRef.current = stream;
         if (userCameraRef.current) {
           userCameraRef.current.srcObject = stream;
         }
-        setHasUserMediaPermission(true); // Habilitar los botones de inicio
-        setShowAutoplayBlockedMessage(false); // Limpiar cualquier mensaje de bloqueo previo
+        setHasUserMediaPermission(true);
+        setShowAutoplayBlockedMessage(false);
         console.log("🎥 User camera preview stream acquired and permissions granted.");
       } catch (error: any) {
         console.error("❌ No se pudo acceder a la cámara del usuario para la vista previa o grabación:", error);
-        setHasUserMediaPermission(false); // Deshabilitar botones
-        setShowAutoplayBlockedMessage(true); // Mostrar mensaje de bloqueo
+        setHasUserMediaPermission(false);
+        setShowAutoplayBlockedMessage(true);
       }
     };
 
-    getUserMediaStream(); // Llamar a la función al montar
+    getUserMediaStream();
 
-    // Cleanup: Detener stream de la cámara del usuario al desmontar si no se ha manejado por la finalización
     return () => {
-        if (!isFinalizingRef.current) { // Solo limpiar si no estamos ya en el proceso de finalización
+        if (!isFinalizingRef.current) {
             console.log("useEffect cleanup: Deteniendo medios locales (no finalizando).");
             stopUserCameraRecording();
         }
     };
-  }, [stopUserCameraRecording, isFinalizingRef]); // Se ejecuta solo una vez al montar
+  }, [stopUserCameraRecording, isFinalizingRef]);
 
   // --- EFECTO PARA INICIAR LA GRABACIÓN DEL USUARIO CUANDO LA SESIÓN DE HEYGEN ESTÁ CONECTADA ---
   useEffect(() => {
@@ -320,7 +347,6 @@ function InteractiveSessionContent() {
     setIsAttemptingAutoStart(true);
     setShowAutoplayBlockedMessage(false);
 
-    // Asegurarse de que los permisos de usuario están concedidos
     if (!hasUserMediaPermission) {
         alert("Por favor, permite el acceso a la cámara y el micrófono antes de iniciar la sesión.");
         setIsAttemptingAutoStart(false);
@@ -332,12 +358,11 @@ function InteractiveSessionContent() {
       const avatar = initAvatar(heygenToken);
       console.log("Avatar initialized with HeyGen token.");
 
-      // Set up Event Listeners for HeyGen Avatar
       avatar.on(StreamingEvents.AVATAR_START_TALKING, () => console.log("Avatar started talking"));
       avatar.on(StreamingEvents.AVATAR_STOP_TALKING, () => console.log("Avatar stopped talking"));
       avatar.on(StreamingEvents.STREAM_DISCONNECTED, () => {
         console.log("HeyGen Stream disconnected.");
-        if (!isFinalizingRef.current) { // Only finalize if not already doing so.
+        if (!isFinalizingRef.current) {
             console.log("Stream desconectado inesperadamente. Disparando finalización.");
             stopAndFinalizeSession();
         }
@@ -349,10 +374,26 @@ function InteractiveSessionContent() {
       });
       avatar.on(StreamingEvents.USER_START, (event) => console.log(">>>>> User started talking:", event));
       avatar.on(StreamingEvents.USER_STOP, () => console.log(">>>>> User stopped talking."));
-      avatar.on(StreamingEvents.USER_END_MESSAGE, (event) => console.log(">>>>> User end message:", event));
-      avatar.on(StreamingEvents.USER_TALKING_MESSAGE, (event) => console.log(">>>>> User talking message:", event));
-      avatar.on(StreamingEvents.AVATAR_TALKING_MESSAGE, (event) => console.log(">>>>> Avatar talking message:", event));
-      avatar.on(StreamingEvents.AVATAR_END_MESSAGE, (event) => console.log(">>>>> Avatar end message:", event));
+      avatar.on(StreamingEvents.USER_END_MESSAGE, (event) => {
+        // --- LOG DE DIAGNÓSTICO ---
+        console.log("HeyGen: USER_END_MESSAGE event received. Current messageHistory (User):", messageHistory.filter(msg => msg.sender === MessageSender.CLIENT).map(msg => msg.content));
+        // --- FIN LOG ---
+      });
+      avatar.on(StreamingEvents.USER_TALKING_MESSAGE, (event) => {
+        // --- LOG DE DIAGNÓSTICO ---
+        console.log("HeyGen: USER_TALKING_MESSAGE event received. Message:", event.message);
+        // --- FIN LOG ---
+      });
+      avatar.on(StreamingEvents.AVATAR_TALKING_MESSAGE, (event) => {
+        // --- LOG DE DIAGNÓSTICO ---
+        console.log("HeyGen: AVATAR_TALKING_MESSAGE event received. Message:", event.message);
+        // --- FIN LOG ---
+      });
+      avatar.on(StreamingEvents.AVATAR_END_MESSAGE, (event) => {
+        // --- LOG DE DIAGNÓSTICO ---
+        console.log("HeyGen: AVATAR_END_MESSAGE event received. Current messageHistory (Avatar):", messageHistory.filter(msg => msg.sender === MessageSender.AVATAR).map(msg => msg.content));
+        // --- FIN LOG ---
+      });
       avatar.on(
         StreamingEvents.CONNECTION_QUALITY_CHANGED,
         ({ detail }) => {
@@ -360,11 +401,9 @@ function InteractiveSessionContent() {
         }
       );
 
-      // Start Avatar Video Stream
       console.log("Attempting to start Avatar video with config:", config);
       await startAvatar(config);
 
-      // Start Voice Chat (if enabled and permission granted)
       if (startWithVoice) {
         console.log("Attempting to start voice chat (after avatar video started)...");
         await startVoiceChat();
@@ -382,8 +421,8 @@ function InteractiveSessionContent() {
       } else {
         console.error("General error during session start:", error);
       }
-      stopAvatar(); // Ensure cleanup on *any* error during setup
-      stopUserCameraRecording(); // Stop local camera if HeyGen fails to start
+      stopAvatar();
+      stopUserCameraRecording();
     } finally {
       setIsAttemptingAutoStart(false);
     }
@@ -391,25 +430,35 @@ function InteractiveSessionContent() {
 
  useUnmount(() => {
   console.log("Component unmounting. Ensuring all streams/recorders are stopped.");
-  // Condición mejorada:
-  // Solo si la finalización NO está ya en curso (isFinalizingRef.current es false)
-  // Y si la sesión llegó a estar CONECTADA (lo que implica que hubo un inicio exitoso)
   if (!isFinalizingRef.current && sessionState === StreamingAvatarSessionState.CONNECTED) {
       console.log("useUnmount: Sesión CONECTADA y no finalizada explícitamente. Disparando FINALIZACIÓN GRACIAS A UNMOUNT.");
-      stopAndFinalizeSession(); // Llamar a la finalización si la sesión estuvo activa y no se finalizó manualmente
+      stopAndFinalizeSession();
   } else if (!isFinalizingRef.current) {
-      // Si la sesión NO estuvo CONECTADA, o si hubo un error temprano,
-      // simplemente limpiar los recursos locales sin intentar subir/loguear la sesión.
       console.log("useUnmount: Sesión NO CONECTADA o ya finalizando. Solo deteniendo medios locales y avatar.");
-      stopUserCameraRecording(); // Detener cámara de usuario y grabador local
-      stopAvatar(); // Detener SDK de HeyGen
+      stopUserCameraRecording();
+      stopAvatar();
   } else {
-      // Si isFinalizingRef.current es true, significa que ya estamos en proceso de finalización,
-      // y el unmount es parte de ese flujo (router.push ya está en camino).
       console.log("useUnmount: Finalización ya en curso, el desmontaje es parte del proceso.");
   }
 });
-      
+
+  // Effect to handle HeyGen avatar stream video playback (Autoplay handling)
+  useEffect(() => {
+    if (stream && mediaStreamRef.current) {
+      mediaStreamRef.current.srcObject = stream;
+      mediaStreamRef.current.onloadedmetadata = () => {
+        mediaStreamRef.current!.play()
+          .then(() => {
+            console.log("Stream Effect: HeyGen Video played successfully.");
+            setShowAutoplayBlockedMessage(false);
+          })
+          .catch((error) => {
+            console.warn("Stream Effect: Autoplay bloqueado (video playback failed):", error);
+            setShowAutoplayBlockedMessage(true);
+            stopAvatar();
+          });
+      };
+    }
   }, [mediaStreamRef, stream, stopAvatar]);
 
   // Effect to re-attempt playback if avatar video is paused/stuck after connection
@@ -453,14 +502,10 @@ function InteractiveSessionContent() {
     console.log("handleAutoplayRetry triggered by user click.");
     setShowAutoplayBlockedMessage(false);
 
-    // Si ya tenemos permisos de usuario, intenta iniciar sesión de HeyGen
     if (hasUserMediaPermission) {
-        await startHeyGenSession(true); // Siempre intenta con voz después del bloqueo
+        await startHeyGenSession(true);
     } else {
-        // Si no tenemos permisos, el useEffect de getUserMedia lo intentará de nuevo.
-        // Alertar al usuario explícitamente aquí para que conceda permisos.
         alert("Por favor, permite el acceso a la cámara y el micrófono cuando se te solicite para habilitar la sesión.");
-        // Podríamos re-llamar getUserMedia aquí si queremos ser más proactivos
     }
   });
 
