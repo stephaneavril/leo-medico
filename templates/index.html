@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Entrenamiento Leo - Ingreso</title>
+  <style>
+    body {
+      background-color: #0c0e2c;
+      color: white;
+      font-family: 'Segoe UI', sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+    }
+
+    form {
+      background-color: #1b1e3d;
+      padding: 30px;
+      border-radius: 12px;
+      box-shadow: 0 0 20px rgba(0, 191, 255, 0.3);
+      text-align: center;
+    }
+
+    h1 {
+      margin-bottom: 20px;
+      color: #00bfff;
+    }
+
+    input {
+      padding: 12px;
+      margin: 10px 0;
+      width: 260px;
+      border: none;
+      border-radius: 6px;
+      font-size: 16px;
+    }
+
+    button {
+      padding: 10px 30px;
+      background-color: #00bfff;
+      color: black;
+      border: none;
+      border-radius: 5px;
+      font-weight: bold;
+      cursor: pointer;
+      font-size: 16px;
+    }
+  </style>
+</head>
+<body>
+
+  <form action="/dashboard" method="POST">
+    <h1>🧠 Entrenamiento Virtual con Leo</h1>
+    <input type="text" name="name" placeholder="Tu nombre" required><br>
+    <input type="email" name="email" placeholder="Correo electrónico" required><br>
+    <input type="text" name="token" placeholder="Tu código de acceso" required><br>
+    <button type="submit">Comenzar</button>
+  </form>
+<footer>
+    <p>Desarrollado por <a href="https://www.teams.com.mx" target="_blank">Teams</a> &copy; 2025</p>
+  </footer>
+</body>
+</html>

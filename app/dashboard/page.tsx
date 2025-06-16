@@ -1,0 +1,218 @@
+// File: stephaneavril/leo_api/LEO_API-b913b081323a85b5938124f7a062b68789831888/app/dashboard/page.tsx
+'use client';
+
+import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import Cookies from 'js-cookie';
+import Link from 'next/link';
+
+interface SessionRecord {
+  scenario: string;
+  message: string; // User's message
+  evaluation: string; // Public AI summary
+  audio_path: string | null; // S3 video URL
+  timestamp: string;
+  tip: string; // Personalized tip
+  visual_feedback: string;
+}
+
+export default function DashboardPage() {
+  const [name, setName] = useState<string | null>(null);
+  const [email, setEmail] = useState<string | null>(null);
+  const [token, setToken] = useState<string | null>(null);
+  const [records, setRecords] = useState<SessionRecord[]>([]);
+  const [usedSeconds, setUsedSeconds] = useState<number>(0);
+  const maxSeconds = 1800; // 30 minutes
+  const router = useRouter();
+
+  useEffect(() => {
+    const userName = Cookies.get('user_name');
+    const userEmail = Cookies.get('user_email');
+    const userToken = Cookies.get('user_token');
+
+    if (!userName || !userEmail || !userToken) {
+      router.push('/'); // Redirect to login if no user data
+      return;
+    }
+
+    setName(userName);
+    setEmail(userEmail);
+    setToken(userToken);
+
+    const fetchDashboardData = async () => {
+      try {
+        const flaskApiUrl = process.env.NEXT_PUBLIC_FLASK_API_URL;
+        const response = await fetch(`${flaskApiUrl}/dashboard_data`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ name: userName, email: userEmail, token: userToken }),
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          setRecords(data.records);
+          setUsedSeconds(data.used_seconds);
+        } else {
+          const errorText = await response.text();
+          console.error('Error fetching dashboard data:', errorText);
+          alert(`Error al cargar el dashboard: ${errorText}`);
+          router.push('/'); // Redirect if data fetch fails (e.g., unauthorized)
+        }
+      } catch (error) {
+        console.error('Network error fetching dashboard data:', error);
+        alert('Error de red al cargar el dashboard. Intenta de nuevo.');
+        router.push('/');
+      }
+    };
+
+    fetchDashboardData();
+  }, [router]);
+
+  const formatTime = (totalSeconds: number) => {
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+  };
+
+  if (!name) {
+    return <div className="min-h-screen flex items-center justify-center bg-zinc-900 text-white">Cargando...</div>;
+  }
+
+  return (
+    <div className="min-h-screen bg-zinc-900 text-white flex flex-col items-center">
+      <header className="w-full bg-zinc-950 p-6 shadow-md">
+        <h1 className="text-3xl font-bold text-blue-400 text-center md:text-left md:ml-10">
+          ¡Bienvenido/a, {name}!
+        </h1>
+        <p className="text-zinc-400 text-center md:text-left md:ml-10">Centro de entrenamiento virtual con Leo</p>
+      </header>
+
+      <div className="container max-w-4xl mx-auto p-6 flex flex-col gap-8">
+        <h2 className="text-2xl font-bold text-blue-400 border-b-2 border-blue-600 pb-3">
+          Selecciona tu entrenamiento
+        </h2>
+
+        <div className="flex flex-col md:flex-row items-start gap-5 p-4 bg-zinc-800 rounded-lg shadow-md">
+          <div className="info flex-1 text-zinc-300">
+            <h3 className="text-xl font-semibold text-blue-400 mb-3">📘 Instrucciones clave para tu sesión:</h3>
+            <ul className="text-left list-disc list-inside space-y-2">
+              <li>🖱️ Al hacer clic en <strong>"Iniciar"</strong>, serás conectado con el doctor virtual Leo.</li>
+              <li>⏱️ El cronómetro comienza automáticamente (8 minutos por sesión).</li>
+              <li>🎥 Autoriza el acceso a tu <strong>cámara</strong> y <strong>micrófono</strong> cuando se te pida.</li>
+              <li>👨‍⚕️ Una vez conectado, haz clic en el micrófono en la ventana del avatar y comienza la conversación médica.</li>
+              <li>🗣️ Habla con claridad y presenta tu producto de forma profesional.</li>
+              <li>🤫 Cuando termines de hablar, espera la respuesta del Dr. Leo, él sabe cuándo contestar.</li>
+              <li>🎤 Si quieres volver a hablar, haz clic otra vez en el micro de la ventana del doctor y continúa.</li>
+              <li>🎯 Sigue el modelo de ventas <strong>Da Vinci</strong>: saludo, necesidad, propuesta, cierre.</li>
+            </ul>
+            <p className="mt-4 text-sm">Tu sesión será evaluada automáticamente por IA. ¡Aprovecha cada minuto!</p>
+          </div>
+          <video controls autoPlay muted loop className="w-full md:w-80 rounded-lg shadow-lg border border-blue-500">
+            <source src="/video_intro.mp4" type="video/mp4" />
+            Tu navegador no soporta la reproducción de video.
+          </video>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+          <div className="card bg-zinc-800 rounded-lg p-6 shadow-md text-center">
+            <h3 className="text-xl font-semibold text-blue-300 mb-3">Entrevista con médico</h3>
+            {email && token && (
+              <Link
+                href={{
+                  pathname: '/interactive-session',
+                  query: { name: name!, email: email!, scenario: 'Entrevista con médico', token: token! },
+                }}
+                className="inline-block bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-6 rounded-lg transition duration-200"
+              >
+                Iniciar
+              </Link>
+            )}
+          </div>
+
+          <div className="card bg-zinc-800 rounded-lg p-6 shadow-md text-center opacity-60 cursor-not-allowed">
+            <h3 className="text-xl font-semibold text-zinc-400 mb-3">Coaching para representante</h3>
+            <button
+              disabled
+              className="w-full bg-zinc-600 text-zinc-300 font-semibold py-3 px-6 rounded-lg"
+            >
+              Muy pronto
+            </button>
+          </div>
+
+          <div className="card bg-zinc-800 rounded-lg p-6 shadow-md text-center opacity-60 cursor-not-allowed">
+            <h3 className="text-xl font-semibold text-zinc-400 mb-3">Capacitación farmacéutico</h3>
+            <button
+              disabled
+              className="w-full bg-zinc-600 text-zinc-300 font-semibold py-3 px-6 rounded-lg"
+            >
+              Muy pronto
+            </button>
+          </div>
+        </div>
+
+        <div className="info bg-zinc-800 p-4 rounded-lg shadow-md border-l-4 border-blue-600">
+          <strong className="text-blue-300 text-lg">⏱ Tiempo mensual utilizado:</strong>
+          <div className="progress-bar h-6 bg-zinc-700 rounded-full overflow-hidden mt-3 max-w-md mx-auto">
+            <div
+              className="progress-fill h-full rounded-full"
+              style={{
+                width: `${(usedSeconds / maxSeconds) * 100}%`,
+                background: usedSeconds >= maxSeconds * 0.9 ? '#ff4d4d' : usedSeconds >= maxSeconds * 0.7 ? 'orange' : '#00bfff',
+              }}
+            ></div>
+          </div>
+          <p className="mt-2 text-sm text-zinc-300 text-center">
+            Usado: {formatTime(usedSeconds)} de {formatTime(maxSeconds)} minutos.
+          </p>
+        </div>
+
+        <div className="session-log">
+          <h2 className="text-2xl font-bold text-blue-400 border-b-2 border-blue-600 pb-3 mb-5">
+            Tus sesiones anteriores
+          </h2>
+          {records.length > 0 ? (
+            records.map((r, index) => (
+              <div key={index} className="session-entry bg-zinc-800 p-5 rounded-lg shadow-md mb-4">
+                <p className="text-lg font-semibold text-blue-300">Escenario: {r.scenario}</p>
+                <p className="text-zinc-400 text-sm">Fecha: {r.timestamp}</p>
+                <p className="mt-3 text-zinc-300"><strong>Resumen IA:</strong></p>
+                <div className="mt-1 mb-3 p-3 bg-zinc-700 rounded text-zinc-200 text-sm">
+                  <em>{r.evaluation}</em>
+                </div>
+
+                {r.tip && (
+                  <div className="mt-3 p-3 bg-blue-900 bg-opacity-30 border-l-4 border-blue-500 rounded text-zinc-200 text-sm">
+                    <strong>🧠 Consejo personalizado de Leo:</strong>
+                    <p className="mt-1">{r.tip}</p>
+                  </div>
+                )}
+                 {r.visual_feedback && (
+                  <div className="mt-3 p-3 bg-blue-900 bg-opacity-30 border-l-4 border-blue-500 rounded text-zinc-200 text-sm">
+                        <strong>👁️ Retroalimentación Visual:</strong>
+                        <p className="mt-1">{r.visual_feedback}</p>
+                      </div>
+                    )}
+                     {r.audio_path && r.audio_path !== "Video_Not_Available_Error" && r.audio_path !== "Video_Processing_Failed" && r.audio_path !== "Video_Missing_Error" && (
+                        <div className="mt-4">
+                            <video controls className="w-full md:max-w-xl mx-auto rounded-lg shadow-md border border-zinc-600">
+                                <source src={r.audio_path} type="video/mp4" />
+                                Tu navegador no soporta la reproducción de video.
+                            </video>
+                        </div>
+                    )}
+                  </div>
+                ))
+              ) : (
+                <p className="text-zinc-400 text-center">No has realizado sesiones todavía. ¡Comienza una con Leo!</p>
+              )}
+            </div>
+          </div>
+
+          <footer className="mt-10 mb-5 text-sm text-zinc-500 text-center">
+            <p>Desarrollado por <a href="https://www.teams.com.mx" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">Teams</a> &copy; 2025</p>
+          </footer>
+        </div>
+      );
+    }

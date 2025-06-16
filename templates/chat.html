@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Sesión con Leo</title>
+  <style>
+    body {
+      background-color: #0c0e2c;
+      color: white;
+      font-family: 'Segoe UI', sans-serif;
+      padding: 30px;
+      text-align: center;
+    }
+
+    h1 { color: #00bfff; }
+
+    #end-btn, #timer, #to-dashboard {
+      margin-top: 30px;
+      padding: 12px 30px;
+      font-size: 16px;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+
+    #end-btn { background: red; border: none; color: white; }
+
+    #timer {
+      background-color: #222;
+      color: #00ffcc;
+      border: 2px solid #00bfff;
+    }
+
+    #to-dashboard {
+      background: #00bfff;
+      color: white;
+      border: none;
+      display: none;
+    }
+
+    #summary-box {
+      display: none; /* This will now always be hidden as we redirect */
+      margin-top: 50px;
+      background-color: #1f1f3a;
+      padding: 20px;
+      border-radius: 12px;
+      box-shadow: 0 0 10px #000a;
+      max-width: 600px;
+      margin-left: auto;
+      margin-right: auto;
+      text-align: left;
+    }
+
+    #summary-box h2 {
+      color: #00ffcc;
+      margin-bottom: 10px;
+    }
+
+    #recording-indicator {
+      position: fixed;
+      top: 20px;
+      left: 20px;
+      width: 15px;
+      height: 15px;
+      background-color: red;
+      border-radius: 50%;
+      box-shadow: 0 0 10px red;
+      animation: blink 1s infinite;
+      z-index: 9999;
+    }
+
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+
+    #doc-toggle {
+      position: fixed;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background-color: #00bfff;
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 8px;
+      z-index: 9998;
+      cursor: pointer;
+    }
+
+    #doc-panel {
+      position: fixed;
+      top: 0;
+      right: -400px;
+      width: 350px;
+      height: 100%;
+      background-color: #12163f;
+      color: white;
+      padding: 20px;
+      overflow-y: auto;
+      transition: right 0.3s ease;
+      z-index: 9997;
+      border-left: 2px solid #00bfff;
+    }
+
+    .loader {
+      border: 6px solid #f3f3f3;
+      border-top: 6px solid #00e0ff;
+      border-radius: 50%;
+      width: 40px;
+      height: 40px;
+      animation: spin 1s linear infinite;
+      margin: 0 auto 10px auto;
+    }
+
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body>
+  <script>
+  const avatarTranscript = []; // Global: todos los scripts lo ven
+</script>
+  <div id="recording-indicator" title="Grabando..."></div>
+  <h1>🧠 Leo - {{ scenario }}</h1>
+  <p id="status">Solicitando permisos para cámara y micrófono...</p>
+  <div id="ai-agent"></div>
+
+  <button id="doc-toggle">📘 Ver Documentación</button>
+  <div id="doc-panel">
+    <h2>📋 Documentación útil</h2>
+    <hr style="border-color: #00bfff;">
+    <h3>🧠 Presentación Efectiva</h3>
+    <p>Una presentación efectiva combina saludo profesional, identificación de necesidad clínica y una pregunta abierta que involucre al médico.</p>
+    <h3>🎯 Objecciones Médicas</h3>
+    <p>“Ya uso otro producto” → ¿Qué resultados ha observado?</p>
+    <h3>📊 Pasos de Visita</h3>
+    <p>☑ Saludo ☑ Necesidad ☑ Propuesta ☑ Cierre</p>
+    <h3>⚖ Ética y Regulación</h3>
+    <p>✅ Está permitido compartir evidencia válida.<br>⛔ Está prohibido comparar sin estudios o sugerir usos fuera de indicación.</p>
+  </div>
+
+  <button id="end-btn">Finalizar sesión</button>
+  <div id="timer">Duración: 03:00</div> {# Initial display set to 03:00 #}
+
+  <div id="summary-box" style="display:none;">
+    <h2>✅ Resumen de desempeño</h2>
+    <p id="evaluation-text"></p>
+    <div id="extra-tip" style="display:none; margin-top: 30px; background: #f5faff; padding: 20px; border-left: 4px solid #00bfff; border-radius: 8px; color: #222;">
+      <h3>🧠 Consejo personalizado de Leo:</h3>
+      <p id="tip-text">Cargando sugerencia...</p>
+    </div>
+    <form id="dashboardForm" action="/dashboard" method="POST">
+      <input type="hidden" name="name" value="{{ name }}">
+      <input type="hidden" name="email" value="{{ email }}">
+      <input type="hidden" name="token" value="{{ token }}"> {# ESTO ES FUNDAMENTAL, ASEGÚRATE QUE EL VALOR SE ENVÍE #}
+      <button id="to-dashboard" type="submit">Ver mi progreso</button>
+    </form>
+  </div>
+
+  <div id="ia-progress" style="display:none; margin-top:20px; width:100%; max-width:400px; margin: auto;">
+    <div style="background:#333; height:20px; border-radius:10px; overflow:hidden;">
+      <div id="ia-bar" style="width:0%; height:100%; background:#00e0ff;"></div>
+    </div>
+    <p id="ia-progress-text" style="color:#ccc; font-size:0.8em; margin-top:5px;">Procesando...</p>
+  </div>
+
+  <script>
+    // Removed the 'messages' array and 'registrarMensaje' function as they are no longer needed
+    // for D-ID conversation capture. User speech will come from Whisper transcription of video.
+
+    // Doc Panel Toggle
+    const docBtn = document.getElementById("doc-toggle");
+    const docPanel = document.getElementById("doc-panel");
+    docBtn.addEventListener("click", () => {
+      docPanel.style.right = docPanel.style.right === "0px" ? "-400px" : "0px";
+    });
+  </script>
+
+  <script>
+!function(window){
+  const host="https://labs.heygen.com";
+  const url=host+"/guest/streaming-embed?share={{ heygen_streaming_share_token }}&inIFrame=1";
+  const clientWidth=document.body.clientWidth;
+  const wrapDiv=document.createElement("div");
+  wrapDiv.id="heygen-streaming-embed";
+  const container=document.createElement("div");
+  container.id="heygen-streaming-container";
+  const stylesheet=document.createElement("style");
+  stylesheet.innerHTML=`
+    #heygen-streaming-embed {
+      z-index: 9999;
+      position: fixed;
+      left: 40px;
+      bottom: 40px;
+      width: 200px;
+      height: 200px;
+      border-radius: 50%;
+      border: 2px solid #fff;
+      box-shadow: 0px 8px 24px 0px rgba(0, 0, 0, 0.12);
+      transition: all linear 0.1s;
+      overflow: hidden;
+      opacity: 0;
+      visibility: hidden;
+    }
+    #heygen-streaming-embed.show {
+      opacity: 1;
+      visibility: visible;
+    }
+    #heygen-streaming-embed.expand {
+      ${clientWidth<540?"height: 266px; width: 96%; left: 50%; transform: translateX(-50%);":"height: 366px; width: calc(366px * 16 / 9);"}
+      border: 0;
+      border-radius: 8px;
+    }
+    #heygen-streaming-container {
+      width: 100%;
+      height: 100%;
+    }
+    #heygen-streaming-container iframe {
+      width: 100%;
+      height: 100%;
+      border: 0;
+    }
+  `;
+  const iframe=document.createElement("iframe");
+  iframe.allowFullscreen=!1;
+  iframe.title="Streaming Embed";
+  iframe.role="dialog";
+  iframe.allow="microphone";
+  iframe.src=url;
+  let visible=!1,initial=!1;
+  window.addEventListener("message",(e=>{
+    e.origin===host&&e.data&&e.data.type&&"streaming-embed"===e.data.type&&(
+      "init"===e.data.action?(initial=!0,wrapDiv.classList.toggle("show",initial)):
+      "show"===e.data.action?(visible=!0,wrapDiv.classList.toggle("expand",visible)):
+      "hide"===e.data.action&&(visible=!1,wrapDiv.classList.toggle("expand",visible))
+    );
+  }));
+  container.appendChild(iframe);
+  wrapDiv.appendChild(stylesheet);
+  wrapDiv.appendChild(container);
+  document.body.appendChild(wrapDiv);
+}(globalThis);
+</script>
+
+<script>
+window.addEventListener("message", (event) => {
+    if (event.origin === "https://labs.heygen.com" && event.data && event.data.type === "streaming-embed") {
+        if (event.data.action === "avatarUtterance" && event.data.text) {
+            avatarTranscript.push(event.data.text);
+            console.log("[Avatar Utterance] ", event.data.text);  // Opcional: para ver en consola
+        }
+    }
+});
+</script>
+
+  <script>
+    document.addEventListener("DOMContentLoaded", async () => {
+      const name = "{{ name }}";
+      const email = "{{ email }}";
+      const scenario = "{{ scenario }}";
+
+      // The `used_seconds` from the server is still needed to track the monthly cap.
+      // const usedSeconds = parseInt("{{ used_seconds|default(0) }}"); // Kept as it is used to calculate monthly total
+      // const remainingTime = Math.max(300 - usedSeconds, 0); // REMOVED: No longer carry over time
+
+      const endBtn = document.getElementById("end-btn");
+      const status = document.getElementById("status");
+      const timerEl = document.getElementById("timer");
+      const dashBtn = document.getElementById("to-dashboard"); // Still exists for form submission
+
+      let recorder, chunks = [], stream;
+      let sessionEnded = false;
+      let countdown = 480; // FIXED: Each session starts with 8 minutes (480 seconds)
+      let interval;
+
+      const updateTimer = (duration) => {
+        const minutes = Math.floor(duration / 60).toString().padStart(2, '0');
+        const seconds = (duration % 60).toString().padStart(2, '0');
+        timerEl.textContent = `Duración: ${minutes}:${seconds}`;
+      };
+
+      const endSession = async () => {
+        if (sessionEnded) return; // Prevent multiple calls
+        sessionEnded = true;
+        clearInterval(interval); // Stop the countdown timer
+
+        const duration = 480 - countdown; // Calculate actual session duration (for a 8-minute session)
+        document.getElementById("recording-indicator")?.remove();
+        endBtn.disabled = true;
+        endBtn.textContent = "Finalizando sesión..."; // Updated text
+
+        // Stop all media tracks (camera and microphone)
+        if (stream) {
+          stream.getTracks().forEach(track => track.stop());
+        }
+        document.getElementById("preview-video")?.remove();
+
+        // Ensure recorder is stopped and its onstop event is handled before proceeding
+        if (recorder && recorder.state !== 'inactive') {
+          await new Promise(resolve => {
+            recorder.onstop = () => {
+              console.log("MediaRecorder stopped. Chunks ready.");
+              resolve();
+            };
+            recorder.stop();
+          });
+        } else {
+          console.warn("MediaRecorder was not active or not initialized.");
+        }
+
+        // Show processing indicator and progress bar
+        const processingDiv = document.createElement("div");
+        processingDiv.innerHTML = `
+          <div style="text-align:center; margin-top: 20px;" id="ia-waiting">
+            <div class="loader"></div>
+            <h2 style="color: #00ffcc; margin-bottom: 10px;">⏳ Analizando tu desempeño...</h2>
+            <p style="color: white; font-size: 1.2em;">
+              Evaluando con inteligencia artificial, por favor espera.
+            </p>
+            <p style="color: #ccc; font-size: 0.9em;">
+              Analizando video, audio y conversación para generar retroalimentación completa.
+            </p>
+          </div>
+        `;
+        document.body.appendChild(processingDiv);
+
+        const iaProgressDiv = document.getElementById("ia-progress");
+        const iaBar = document.getElementById("ia-bar");
+        const iaText = document.getElementById("ia-progress-text");
+        iaProgressDiv.style.display = "block"; // Make the progress bar visible
+
+        // Simulate progress for UI feedback while waiting for backend
+        let currentProgress = 0;
+        const updateSimulatedProgress = (stepName, targetPercentage) => {
+          const stepIncrement = (targetPercentage - currentProgress) / 20; // 20 small steps to reach target
+          const intervalDuration = 100; // milliseconds
+          const simInterval = setInterval(() => {
+            currentProgress += stepIncrement;
+            if (currentProgress >= targetPercentage) {
+              currentProgress = targetPercentage;
+              clearInterval(simInterval);
+            }
+            iaBar.style.width = `${Math.round(currentProgress)}%`;
+            iaText.textContent = `${stepName} ${Math.round(currentProgress)}%`;
+          }, intervalDuration);
+          return new Promise(resolve => {
+              setTimeout(() => {
+                  clearInterval(simInterval); // Ensure interval stops even if progress hits early
+                  iaBar.style.width = `${targetPercentage}%`;
+                  iaText.textContent = `${stepName} ${targetPercentage}%`;
+                  resolve();
+              }, 20 * intervalDuration + 50); // Give it a little extra time
+          });
+        };
+
+
+        // --- Backend Calls ---
+        let videoData = null;
+        if (chunks.length > 0) {
+          await updateSimulatedProgress("Subiendo video...", 30);
+          const blob = new Blob(chunks, { type: 'video/webm' });
+          const formData = new FormData();
+          formData.append('video', blob);
+          formData.append('name', name);
+          formData.append('email', email);
+
+          try {
+            const videoRes = await fetch('/upload_video', { method: 'POST', body: formData });
+            videoData = await videoRes.json();
+            if (videoData.status === 'ok' && videoData.s3_object_key) { // CHECK for s3_object_key
+              console.log("Video uploaded successfully. S3 object key:", videoData.s3_object_key);
+            } else {
+              console.error("Backend did not confirm video saved or s3_object_key missing:", videoData);
+              alert("⚠️ Problema al subir el video. Consulta la consola para más detalles.");
+              return; // <--- 🔥 IMPORTANTE: NO PROSEGUIR A log_full_session si el video no está.
+
+            }
+          } catch (error) {
+            console.error("Error uploading video:", error);
+            alert("⚠️ Error de red al subir el video. Verifica tu conexión.");
+          }
+        } else {
+          console.warn("No video chunks captured for upload.");
+          // Still simulate progress to keep the flow consistent
+          await updateSimulatedProgress("Saltando subida de video...", 30);
+        }
+
+        await updateSimulatedProgress("Enviando registro de sesión para análisis...", 60);
+        let sessionData = null;
+        try {
+          // Send an empty 'conversation' array since D-ID events are not being captured.
+          // The AI will rely solely on Whisper transcription of the video for user text.
+          const sessionRes = await fetch('/log_full_session', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+        name,
+        email,
+        scenario,
+        conversation: [], // Aquí sigue vacío si no usas D-ID
+        avatar_transcript: avatarTranscript,  // <--- AQUI AGREGAS ESTO
+        duration,
+        video_filename: videoData?.s3_object_key || null
+    })
+});
+
+          sessionData = await sessionRes.json();
+          // Check for 'processing' status from the new async response
+          if (sessionData.status === 'processing') {
+            console.log("Session processing initiated successfully:", sessionData);
+            await updateSimulatedProgress("Análisis en curso...", 90); // Simulate more progress for async task
+          } else {
+            console.error("Backend did not confirm session processing:", sessionData);
+            alert("⚠️ Error al iniciar el procesamiento de la sesión. Consulta la consola para más detalles.");
+          }
+        } catch (error) {
+          console.error("Error logging session or dispatching task:", error);
+          alert("⚠️ Error de red al iniciar el procesamiento de la sesión. Verifica tu conexión.");
+        }
+
+        await updateSimulatedProgress("Redirigiendo al Dashboard...", 100); // Finish progress bar and update text
+
+        // Remove processing message and hide progress bar
+        document.getElementById("ia-waiting")?.remove();
+        iaProgressDiv.style.display = "none";
+
+        // Redirect to dashboard immediately after displaying completion and before final timeout
+        document.getElementById("dashboardForm").submit();
+
+      };
+
+      // Initial camera and microphone permission request
+     try {
+        stream = await navigator.mediaDevices.getUserMedia({
+            audio: true,
+            video: {
+                width: { ideal: 640, max: 640 }, // Request 480p width
+                height: { ideal: 480, max: 480 },   // Request 480p height
+                frameRate: { ideal: 15, max: 15 } // Optionally, reduce frame rate
+            }
+        });
+      const preview = document.createElement("video");
+preview.srcObject = stream;
+preview.autoplay = true;
+preview.muted = true;
+preview.playsinline = true; // Agrega esta línea justo después de preview.muted = true;
+preview.style.width = "320px";           // MÁS GRANDE
+preview.style.height = "180px";          // PROPORCIÓN 16:9
+preview.style.position = "fixed";
+preview.style.bottom = "20px";
+preview.style.right = "20px";            // A LA DERECHA
+preview.style.border = "2px solid #00bfff";  // OPCIONAL: le pones borde para que quede más bonito
+preview.style.borderRadius = "12px";         // OPCIONAL: bordes redondeados
+preview.style.boxShadow = "0 0 10px rgba(0,0,0,0.5)"; // OPCIONAL: un poco de sombra
+preview.id = "preview-video";
+document.body.appendChild(preview);
+
+        status.textContent = "Permiso concedido. Grabando sesión...";
+
+        recorder = new MediaRecorder(stream, {
+            mimeType: "video/webm;codecs=vp8",
+            videoBitsPerSecond: 2500000, // 2.5 Mbps para buena calidad en 640x480
+            audioBitsPerSecond: 128000   // 128 kbps para audio
+        });
+
+        recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
+        recorder.start();
+        console.log("MediaRecorder started.");
+
+      } catch (err) {
+        console.error("❌ Error con cámara/micrófono:", err);
+        status.innerHTML = `❌ Error al acceder a cámara o micrófono:<br><code>${err.message}</code>`;
+        status.style.color = "red";
+        endBtn.disabled = true; // Disable end button if no media
+        return;
+      }
+
+      endBtn.addEventListener("click", endSession);
+
+      // Start the countdown timer
+      updateTimer(countdown); // Initial display
+      interval = setInterval(() => {
+        countdown--;
+        updateTimer(countdown);
+        if (countdown <= 0) {
+          clearInterval(interval);
+          endSession(); // End session automatically when timer runs out
+        }
+      }, 1000);
+    });
+
+  </script>
+
+  <footer>
+    <p>Desarrollado por <a href="https://www.teams.com.mx" target="_blank">Teams</a> &copy; 2025</p>
+  </footer>
+</body>
+</html>

@@ -1,0 +1,14 @@
+Flask
+flask-cors
+openai>=1.0.0
+requests
+python-dotenv
+gunicorn
+pandas
+matplotlib
+opencv-python
+moviepy==1.0.3
+mediapipe
+celery[redis] 
+boto3
+psycopg2-binary
