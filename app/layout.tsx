@@ -1,27 +1,26 @@
 // File: stephaneavril/leo_api/LEO_API-b913b081323a85b5938124f7a062b68789831888/app/layout.tsx
 import "@/styles/globals.css";
 import { Metadata } from "next";
-import { Fira_Code as FontMono, Inter as FontSans } from "next/font/google";
+// Importaciones de fuentes comentadas para solucionar error de NextFontError en Render.com
+// import { Fira_Code as FontMono, Inter as FontSans } from "next/font/google";
 
-// import NavBar from "@/components/NavBar"; // Importa NavBar de nuevo - ESTA LÍNEA SE COMENTÓ/ELIMINÓ -> Ahora descomentamos o la borramos
+// const fontSans = FontSans({
+//   subsets: ["latin"],
+//   variable: "--font-sans",
+// });
 
-const fontSans = FontSans({
-  subsets: ["latin"],
-  variable: "--font-sans",
-});
-
-const fontMono = FontMono({
-  subsets: ["latin"],
-  variable: "--font-geist-mono",
-});
+// const fontMono = FontMono({
+//   subsets: ["latin"],
+//   variable: "--font-geist-mono",
+// });
 
 export const metadata: Metadata = {
   title: {
-    default: "HeyGen Interactive Avatar SDK Demo", // Título original
-    template: `%s - HeyGen Interactive Avatar SDK Demo`, // Plantilla original
+    default: "HeyGen Interactive Avatar SDK Demo",
+    template: `%s - HeyGen Interactive Avatar SDK Demo`,
   },
   icons: {
-    icon: "/heygen-logo.png", // Ícono original
+    icon: "/heygen-logo.png",
   },
 };
 
@@ -33,8 +32,10 @@ export default function RootLayout({
   return (
     <html
       suppressHydrationWarning
-      className={`${fontSans.variable} ${fontMono.variable} font-sans`}
-      lang="en" // Idioma original
+      // Elimina las clases de variables de fuentes aquí
+      // className={`${fontSans.variable} ${fontMono.variable} font-sans`}
+      className="font-sans" // Usar una fuente sans-serif genérica del sistema
+      lang="en"
     >
       <head />
       <body className="min-h-screen bg-black text-white">
