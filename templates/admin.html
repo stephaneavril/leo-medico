@@ -399,13 +399,13 @@
 
         {# Original code for combined chat log #}
         <div class="chat-log">
-          <p><strong>Participante:</strong> {{ row[4] }}</p>
-          <p><strong>Leo:</strong> {{ row[5] }}</p>
+          <p><strong>Participante:</strong> {{ row[3] }}</p>
+          <p><strong>Leo:</strong> {{ row[4] }}</p>
         </div>
 
         {# Video display #}
-        {% if row[7] and row[9].overall_rh_summary %} {# Check if audio_path (row[7]) and evaluation_rh (row[9]) are present #}
-          <video controls src="{{ row[7] }}"></video> 
+        {% if row[5] and row[8].overall_rh_summary %}
+          <video controls src="{{ row[5] }}"></video> 
         {% else %}
           <p style="color: gray; text-align: center;">⏳ Esta sesión se mostrará completa cuando el análisis haya terminado.</p>
         {% endif %}
@@ -414,43 +414,54 @@
         {% if row[5] %} {# Check if raw response (avatar dialogue) exists in row[5] #}
         <div class="chat-log" style="background-color: #fcf8f2; border-left-color: #ffaa00;">
           <p><strong>🗣️ Discurso completo del Avatar:</strong></p>
-          <div class="avatar-dialogue-content" data-json-dialogue="{{ row[5] | tojson }}"
+          <div class="avatar-dialogue-content" data-json-dialogue="{{ row[12] | tojson }}"
                style="background-color: #e9f5ff; border: 1px solid #cce5ff; padding: 14px; border-radius: 16px; font-family: 'Open Sans', sans-serif; font-size: 15px; color: #222; line-height: 1.6; white-space: pre-line; max-width: 90%; margin: 10px auto;">
             {# Content will be inserted by JavaScript #}
           </div>
         </div>
         {% endif %}
 
+        {% if row[9] %}
+<div class="chat-log" style="background-color: #fcf8f2; border-left-color: #ffaa00;">
+  <p><strong>🗣️ Discurso completo del Avatar:</strong></p>
+ <div style="background-color: #e9f5ff; border: 1px solid #cce5ff; padding: 14px; border-radius: 16px; font-family: 'Open Sans', sans-serif; font-size: 15px; color: #222; line-height: 1.6; white-space: pre-line; max-width: 90%; margin: 10px auto;">
+    🗨️ {{ row[9] }}
+</div>
+
+</div>
+{% endif %}
+
+
         <div class="evaluation">
           <strong>Resumen para usuario:</strong><br>
-          {{ row[8] }} {# Use row[8] for public evaluation #}
+          {{ row[7] }}
         </div>
 
         <div class="evaluation rh">
-          {% if row[9].overall_rh_summary %} {# Use row[9] for internal RH evaluation #}
+          {% if row[8].overall_rh_summary %}
             <strong>Análisis para RH:</strong><br>
-            <p><strong>Resumen General RH:</strong> {{ row[9].overall_rh_summary }}</p>
+            <p><strong>Resumen General RH:</strong> {{ row[8].overall_rh_summary }}</p>
 
             <h4>🎯 Aplicación del Modelo de Ventas (Da Vinci)</h4>
             <div style="border: 1px solid var(--border-color); padding: 10px; border-radius: 5px;">
                 <div class="metric-line">
                     <span class="metric-label">Diagnóstico:</span>
-                    <span class="metric-value">{{ row[9].sales_model_simple_detection.diagnostico }}</span>
+                    <span class="metric-value">{{ row[8].sales_model_simple_detection.diagnostico }}</span>
                 </div>
                 <div class="metric-line">
                     <span class="metric-label">Argumentación:</span>
-                    <span class="metric-value">{{ row[9].sales_model_simple_detection.argumentacion }}</span>
+                    <span class="metric-value">{{ row[8].sales_model_simple_detection.argumentacion }}</span>
                 </div>
                 <div class="metric-line">
                     <span class="metric-label">Validación:</span>
-                    <span class="metric-value">{{ row[9].sales_model_simple_detection.validacion }}</span>
+                    <span class="metric-value">{{ row[8].sales_model_simple_detection.validacion }}</span>
                 </div>
                 <div class="metric-line">
                     <span class="metric-label">Cierre:</span>
-                    <span class="metric-value">{{ row[9].sales_model_simple_detection.cierre }}</span>
+                    <span class="metric-value">{{ row[8].sales_model_simple_detection.cierre }}</span>
                 </div>
                 <p style="text-align: right; margin-top: 5px; font-size: 0.85em; color: #666;">
-                    (Pasos detectados por análisis simple: {{ row[9].sales_model_simple_detection.steps_applied_count }})
+                    (Pasos detectados por análisis simple: {{ row[8].sales_model_simple_detection.steps_applied_count }})
                 </p>
             </div>
 
@@ -458,72 +469,72 @@
             <div style="border: 1px solid var(--border-color); padding: 10px; border-radius: 5px;">
                 <div class="metric-line">
                     <span class="metric-label">Palabras clave científicas:</span>
-                    <span class="metric-value">{{ row[9].knowledge_score }}</span>
+                    <span class="metric-value">{{ row[8].knowledge_score }}</span>
                 </div>
                 <div class="metric-line">
                     <span class="metric-label">Escucha Activa (Simple):</span>
-                    <span class="metric-value">{{ row[9].active_listening_simple_detection }}</span>
+                    <span class="metric-value">{{ row[8].active_listening_simple_detection }}</span>
                 </div>
                 <div class="metric-line">
                     <span class="metric-label">Presencia en Video:</span>
-                    <span class="metric-value">{{ row[9].visual_presence }} ({{ row[9].visual_percentage }})</span>
+                    <span class="metric-value">{{ row[8].visual_presence }} ({{ row[8].visual_percentage }})</span>
                 </div>
             </div>
 
-            {% if row[9].gpt_detailed_feedback %}
+            {% if row[8].gpt_detailed_feedback %}
               <h4>Comentarios Detallados de la Inteligencia Artificial:</h4>
               <div style="background: #fdfdff; padding: 15px; border-radius: 8px; border: 1px solid #e9e9e9;">
-                {% if row[9].gpt_detailed_feedback.overall_evaluation %}
-                  <p><strong>Evaluación General de la IA:</strong> {{ row[9].gpt_detailed_feedback.overall_evaluation }}</p>
+                {% if row[8].gpt_detailed_feedback.overall_evaluation %}
+                  <p><strong>Evaluación General de la IA:</strong> {{ row[8].gpt_detailed_feedback.overall_evaluation }}</p>
                 {% endif %}
 
-                {% if row[9].gpt_detailed_feedback.da_vinci_model_feedback %}
+                {% if row[8].gpt_detailed_feedback.da_vinci_model_feedback %}
                   <p><strong>Análisis de Fases del Modelo Da Vinci:</strong></p>
                   <ul>
-                    {% for phase, details in row[9].gpt_detailed_feedback.da_vinci_model_feedback.items() %}
+                    {% for phase, details in row[8].gpt_detailed_feedback.da_vinci_model_feedback.items() %}
                       <li><strong>{{ phase | capitalize }}:</strong> <span style="font-weight: bold; color: var(--primary-dark);">{{ details.score }}</span> - {{ details.feedback }}</li>
                     {% endfor %}
                   </ul>
                 {% endif %}
 
-                {% if row[9].gpt_detailed_feedback.insights_discovery_adaptation %}
+                {% if row[8].gpt_detailed_feedback.insights_discovery_adaptation %}
                   <p><strong>Adaptación al Estilo del Médico (Insights Discovery):</strong></p>
                   <ul>
-                    <li>Tipo inferido de Leo: <span style="font-weight: bold; color: var(--primary-dark);">{{ row[9].gpt_detailed_feedback.insights_discovery_adaptation.inferred_leo_type }}</span></li>
-                    <li>Nivel de adaptación: <span style="font-weight: bold; color: var(--primary-dark);">{{ row[9].gpt_detailed_feedback.insights_discovery_adaptation.adaptation_score }}</span></li>
-                    <li>Comentarios: {{ row[9].gpt_detailed_feedback.insights_discovery_adaptation.feedback }}</li>
+                    <li>Tipo inferido de Leo: <span style="font-weight: bold; color: var(--primary-dark);">{{ row[8].gpt_detailed_feedback.insights_discovery_adaptation.inferred_leo_type }}</span></li>
+                    <li>Nivel de adaptación: <span style="font-weight: bold; color: var(--primary-dark);">{{ row[8].gpt_detailed_feedback.insights_discovery_adaptation.adaptation_score }}</span></li>
+                    <li>Comentarios: {{ row[8].gpt_detailed_feedback.insights_discovery_adaptation.feedback }}</li>
                   </ul>
                 {% endif %}
 
-                {% if row[9].gpt_detailed_feedback.objection_handling_feedback and row[9].gpt_detailed_feedback.objection_handling_feedback.objection_detected %}
+                {% if row[8].gpt_detailed_feedback.objection_handling_feedback and row[8].gpt_detailed_feedback.objection_handling_feedback.objection_detected %}
                   <p><strong>Manejo de Objeciones:</strong></p>
                   <ul>
                     <li>Objeción detectada: <span style="font-weight: bold; color: var(--primary-dark);">Sí</span></li>
-                    <li>Tipo de objeción (MILD): <span style="font-weight: bold; color: var(--primary-dark);">{{ row[9].gpt_detailed_feedback.objection_handling_feedback.type }}</span></li>
-                    <li>APACT aplicado: <span style="font-weight: bold; color: var(--primary-dark);">{{ row[9].gpt_detailed_feedback.objection_handling_feedback.apact_applied }}</span></li>
-                    <li>Comentarios: {{ row[9].gpt_detailed_feedback.objection_handling_feedback.feedback }}</li>
+                    <li>Tipo de objeción (MILD): <span style="font-weight: bold; color: var(--primary-dark);">{{ row[8].gpt_detailed_feedback.objection_handling_feedback.type }}</span></li>
+                    <li>APACT aplicado: <span style="font-weight: bold; color: var(--primary-dark);">{{ row[8].gpt_detailed_feedback.objection_handling_feedback.apact_applied }}</span></li>
+                    <li>Comentarios: {{ row[8].gpt_detailed_feedback.objection_handling_feedback.feedback }}</li>
                   </ul>
-                {% elif row[9].gpt_detailed_feedback.objection_handling_feedback and not row[9].gpt_detailed_feedback.objection_handling_feedback.objection_detected %}
+                {% elif row[8].gpt_detailed_feedback.objection_handling_feedback and not row[8].gpt_detailed_feedback.objection_handling_feedback.objection_detected %}
                   <p><strong>Manejo de Objeciones:</strong> No se detectaron objeciones del médico en esta sesión.</p>
                 {% endif %}
 
-                {% if row[9].gpt_detailed_feedback.active_listening_feedback %}
-                  <p><strong>Escucha Activa Detallada:</strong> <span style="font-weight: bold; color: var(--primary-dark);">{{ row[9].gpt_detailed_feedback.active_listening_feedback.score }}</span> - {{ row[9].gpt_detailed_feedback.active_listening_feedback.feedback }}</p>
+                {% if row[8].gpt_detailed_feedback.active_listening_feedback %}
+                  <p><strong>Escucha Activa Detallada:</strong> <span style="font-weight: bold; color: var(--primary-dark);">{{ row[8].gpt_detailed_feedback.active_listening_feedback.score }}</span> - {{ row[8].gpt_detailed_feedback.active_listening_feedback.feedback }}</p>
                 {% endif %}
 
-                {% if row[9].gpt_detailed_feedback.strengths %}
+                {% if row[8].gpt_detailed_feedback.strengths %}
                   <p><strong>Puntos Fuertes Identificados por la IA:</strong></p>
                   <ul>
-                    {% for strength in row[9].gpt_detailed_feedback.strengths %}
+                    {% for strength in row[8].gpt_detailed_feedback.strengths %}
                       <li>{{ strength }}</li>
                     {% endfor %}
                   </ul>
                 {% endif %}
 
-                {% if row[9].gpt_detailed_feedback.areas_for_improvement_specific %}
+                {% if row[8].gpt_detailed_feedback.areas_for_improvement_specific %}
                   <p><strong>Áreas de Mejora Específicas (Sugerencias de la IA para Coaching):</strong></p>
                   <ul>
-                    {% for area in row[9].gpt_detailed_feedback.areas_for_improvement_specific %}
+                    {% for area in row[8].gpt_detailed_feedback.areas_for_improvement_specific %}
                       <li>{{ area }}</li>
                     {% endfor %}
                   </ul>
@@ -534,7 +545,7 @@
               <p>No hay feedback detallado de la IA disponible para esta sesión.</p>
             {% endif %}
 
-          {% endif %} {# End if row[9].overall_rh_summary #}
+          {% endif %} {# End if row[8].error #}
           <div style="margin-top: 20px; text-align: right;">
         <form action="/admin/delete_session/{{ row[0] }}" method="POST" onsubmit="return confirm('¿Estás seguro de que quieres eliminar esta sesión y su video?');">
           <button type="submit" style="background-color: #dc3545; color: white; padding: 8px 15px; border-radius: 5px; border: none; cursor: pointer;">
@@ -622,7 +633,9 @@
         <input name="start_date" type="date" id="start_date" required>
 
         <label for="end_date">Fin:</label>
-        <input name="end_date" type="date" id="end_date" required>  <button type="submit">Guardar Nuevo Usuario</button>
+        <input name="end_date" type="date" id="end_date" required>  <!-- Added name="end_date" -->
+        
+        <button type="submit">Guardar Nuevo Usuario</button>
       </form>
     </div>
   </div>

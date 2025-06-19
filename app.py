@@ -251,7 +251,9 @@ def admin_panel():
 
             processed_row = list(row)
             processed_row[4] = full_user_text
-
+            processed_row[5] = full_avatar_text
+            processed_row.append(avatar_dialogue_parsed)
+            
             if not processed_row[8]: # evaluation
                  processed_row[8] = "No hay análisis disponible."
             if not processed_row[9] or processed_row[9] == "null": # evaluation_rh
@@ -417,7 +419,9 @@ def dashboard_data():
         c.execute("SELECT SUM(duration_seconds) FROM interactions WHERE email = %s AND timestamp >= %s", (email, start_of_month))
         used_seconds = c.fetchone()[0] or 0
 
-        c.execute("SELECT scenario, message, response, audio_path, timestamp, tip, visual_feedback FROM interactions WHERE name=%s AND email=%s ORDER BY timestamp DESC", (name, email))
+        c.execute("SELECT scenario, message, evaluation, audio_path, timestamp, tip, visual_feedback FROM interactions WHERE name=%s AND email=%s ORDER BY timestamp DESC",
+            (name, email),
+        )
         records_raw = c.fetchall()
 
         records_processed = []
@@ -428,16 +432,17 @@ def dashboard_data():
             except (json.JSONDecodeError, TypeError):
                 display_user_message = "Error al cargar transcripción del participante."
 
-            evaluation_display = r[2] if r[2] and r[2] != "null" else "Transcripción del Avatar no disponible."
-            public_summary_display = r[3] if r[3] else "Video no disponible."
+            evaluation_display = r[2] if r[2] and r[2] != "null" else "No hay análisis disponible."
+            video_url = r[3] if r[3] else "Video no disponible."
+            video_path = r[3] if r[3] else "Video no disponible."
             tip_display = r[5] if r[5] else "No hay consejo."
             visual_feedback_display = r[6] if r[6] else "No hay feedback visual."
 
             records_processed.append({
                 "scenario": r[0],
                 "message": display_user_message,
-                "evaluation": public_summary_display,
-                "audio_path": r[3],
+                "evaluation": evaluation_display,
+                "audio_path": video_path,
                 "timestamp": r[4],
                 "tip": tip_display,
                 "visual_feedback": visual_feedback_display

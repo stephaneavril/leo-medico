@@ -48,7 +48,8 @@ function InteractiveSessionContent() {
   const scenario = searchParams.get('scenario');
   const userToken = searchParams.get('token');
 
-  const { initAvatar, startAvatar, stopAvatar, sessionState, stream, messages, handleUserTalkingMessage, handleStreamingTalkingMessage } = useStreamingAvatarSession();
+  const { initAvatar, startAvatar, stopAvatar, sessionState, stream } = useStreamingAvatarSession();
+  const { messages: messageHistory } = useMessageHistory();
   const { startVoiceChat, isVoiceChatActive } = useVoiceChat();
 
   // messagesRef will hold the latest state of `messages` to avoid stale closures
