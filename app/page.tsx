@@ -1,4 +1,4 @@
-// File: stephaneavril/leo_api/LEO_API-b913b081323a85b5938124f7a062b68789831888/app/interactive-session/page.tsx
+// File: C:\Users\avril\OneDrive\Escritorio\LEO_API\InteractiveAvatarNextJSDemo-main\app\page.tsx
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from "react";
@@ -7,13 +7,13 @@ import { useRouter, useSearchParams } from "next/navigation";
 import {
   AvatarQuality,
   StreamingEvents,
-  VoiceChatTransport,
+  VoiceChatTransport, // Corrected import (was VoiceChatChatTransport)
   VoiceEmotion,
   StartAvatarRequest,
   STTProvider,
   ElevenLabsModel,
 } from "@heygen/streaming-avatar";
-import { StreamingAvatarProvider, StreamingAvatarSessionState, useStreamingAvatarSession, useVoiceChat, MessageSender, useMessageHistory } from "@/components/logic";
+import { StreamingAvatarProvider, StreamingAvatarSessionState, useStreamingAvatarSession, useVoiceChat, MessageSender } from "@/components/logic";
 import { Button } from "@/components/Button";
 import { AvatarConfig } from "@/components/AvatarConfig";
 import { AvatarVideo } from "@/components/AvatarSession/AvatarVideo";
@@ -21,24 +21,22 @@ import { AvatarControls } from "@/components/AvatarSession/AvatarControls";
 import { LoadingIcon } from "@/components/Icons";
 import { MessageHistory } from "@/components/AvatarSession/MessageHistory";
 
-// Define DEFAULT_CONFIG outside the component to prevent re-creation on re-renders
 const DEFAULT_CONFIG: StartAvatarRequest = {
   quality: AvatarQuality.Low,
   avatarName: "Ann_Doctor_Standing2_public",
-  knowledgeId: "13f254b102cf436d8c07b9fb617dbadf", // Asegúrate de que este ID sea válido o configúralo
+  knowledgeId: "13f254b102cf436d8c07b9fb617dbadf",
   voice: {
     rate: 1.5,
     emotion: VoiceEmotion.EXCITED,
     model: ElevenLabsModel.eleven_flash_v2_5,
   },
-  language: "es", // Idioma por defecto en español
-  voiceChatTransport: VoiceChatTransport.WEBSOCKET,
+  language: "es",
+  voiceChatTransport: VoiceChatTransport.WEBSOCKET, // Corrected typo here
   sttSettings: {
     provider: STTProvider.DEEPGRAM,
   },
 };
 
-// Helper for browser check
 const isBrowser = typeof window !== "undefined" && typeof navigator !== "undefined";
 
 function InteractiveSessionContent() {
@@ -48,44 +46,39 @@ function InteractiveSessionContent() {
   const name = searchParams.get('name');
   const email = searchParams.get('email');
   const scenario = searchParams.get('scenario');
-  const userToken = searchParams.get('token'); // This is your Flask user token, not HeyGen's
+  const userToken = searchParams.get('token');
 
-  // HeyGen Streaming Avatar Session Hooks
-  const { initAvatar, startAvatar, stopAvatar, sessionState, stream, messages, handleUserTalkingMessage, handleStreamingTalkingMessage, handleEndMessage } = useStreamingAvatarSession(); // <<-- messages y handlers del context
+  const { initAvatar, startAvatar, stopAvatar, sessionState, stream, messages, handleUserTalkingMessage, handleStreamingTalkingMessage } = useStreamingAvatarSession();
   const { startVoiceChat, isVoiceChatActive } = useVoiceChat();
 
-  // Component State
+  // messagesRef will hold the latest state of `messages` to avoid stale closures
+  const messagesRef = useRef<any[]>([]);
+  useEffect(() => {
+    messagesRef.current = messages;
+    console.log('Page: messagesRef updated with latest messages:', messages);
+  }, [messages]);
+
+
   const [config, setConfig] = useState<StartAvatarRequest>(DEFAULT_CONFIG);
   const [showAutoplayBlockedMessage, setShowAutoplayBlockedMessage] = useState(false);
   const [isAttemptingAutoStart, setIsAttemptingAutoStart] = useState(false);
-  const [recordingTimer, setRecordingTimer] = useState<number>(480); // 480s = 8min session as per chat.html
+  const [recordingTimer, setRecordingTimer] = useState<number>(480);
   const [showDocPanel, setShowDocPanel] = useState(false);
 
 
-  // Video Recording State
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const recordedChunks = useRef<Blob[]>([]); // Se mantiene para recolectar chunks
+  const recordedChunks = useRef<Blob[]>([]);
 
-  // Refs for Video Elements
   const userCameraRef = useRef<HTMLVideoElement>(null);
-  const mediaStreamRef = useRef<HTMLVideoElement>(null); // Ref for HeyGen avatar video
+  const mediaStreamRef = useRef<HTMLVideoElement>(null);
 
-  // --- VARIABLES DE ESTADO/REF PARA CONTROL DE FINALIZACIÓN Y LIMPIEZA ---
-  const isFinalizingRef = useRef(false); // Para asegurar que stopAndFinalizeSession no se llame varias veces
-  const localUserStreamRef = useRef<MediaStream | null>(null); // Referencia al stream de la cámara del usuario
-  const [hasUserMediaPermission, setHasUserMediaPermission] = useState(false); // Nuevo: para habilitar botones de inicio
+  const isFinalizingRef = useRef(false);
+  const localUserStreamRef = useRef<MediaStream | null>(null);
+  const [hasUserMediaPermission, setHasUserMediaPermission] = useState(false);
 
-  // Ref para `messages` (anteriormente `messageHistory`) - para acceder al valor más reciente
-  const messagesRef = useRef(messages);
-  useEffect(() => {
-    messagesRef.current = messages; // Mantiene la ref actualizada con el último `messages` del context
-  }, [messages]);
-  // --- FIN NUEVAS VARIABLES ---
-
-  // Function to stop local recording (user camera)
   const stopUserCameraRecording = useCallback(() => {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      mediaRecorderRef.current.stop(); // Detener el grabador
+      mediaRecorderRef.current.stop();
       mediaRecorderRef.current = null;
       console.log("🎥 MediaRecorder for user stopped.");
     }
@@ -99,7 +92,6 @@ function InteractiveSessionContent() {
     }
   }, []);
 
-  // Function to start user camera recording (called once HeyGen session is ready)
   const startUserCameraRecording = useCallback(() => {
     if (localUserStreamRef.current && !mediaRecorderRef.current) {
       const streamToRecord = localUserStreamRef.current;
@@ -109,7 +101,7 @@ function InteractiveSessionContent() {
       }
       try {
         const recorder = new MediaRecorder(streamToRecord, { mimeType: 'video/webm; codecs=vp8' });
-        recordedChunks.current = []; // Siempre vaciar al inicio de una nueva grabación
+        recordedChunks.current = [];
         recorder.ondataavailable = (event) => {
           if (event.data.size > 0) {
             recordedChunks.current.push(event.data);
@@ -119,11 +111,11 @@ function InteractiveSessionContent() {
         recorder.onerror = (event) => {
             console.error("MediaRecorder error:", event);
         };
-        recorder.start(1000); // Grabar chunks cada segundo para evitar problemas con buffers pequeños
+        recorder.start();
         mediaRecorderRef.current = recorder;
         console.log("🎥 Grabación iniciada del usuario (MediaRecorder).");
         console.log(`🎥 MediaRecorder state after start: ${recorder.state}`);
-      } catch (error) {
+      } catch (error) { // Corrected: 'Catch' to 'catch'
           console.error("Failed to start MediaRecorder:", error);
       }
     } else {
@@ -131,7 +123,8 @@ function InteractiveSessionContent() {
     }
   }, []);
 
-  const stopAndFinalizeSession = useMemoizedFn(async () => {
+  // stopAndFinalizeSession now takes 'messages' as an argument, directly from the caller
+  const stopAndFinalizeSession = useMemoizedFn(async (sessionMessages: any[]) => {
     if (isFinalizingRef.current) {
       console.log("🛑 Finalización ya en progreso o ya completada. Abortando llamada redundante.");
       return;
@@ -140,10 +133,10 @@ function InteractiveSessionContent() {
 
     console.log("🛑 Deteniendo grabación y sesión...");
 
-    stopAvatar(); // Stop HeyGen avatar session
-    stopUserCameraRecording(); // Stop user camera and local recorder (already handled in stopUserCameraRecording)
+    stopAvatar();
+    stopUserCameraRecording();
 
-    // Asegurarse de que el MediaRecorder se detenga y genere el blob ANTES de continuar
+    let videoBlob: Blob | null = null;
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
         await new Promise<void>(resolve => {
             mediaRecorderRef.current!.onstop = () => {
@@ -154,69 +147,54 @@ function InteractiveSessionContent() {
         });
     }
 
-    let videoBlob: Blob | null = null;
     if (recordedChunks.current.length > 0) {
         videoBlob = new Blob(recordedChunks.current, { type: "video/webm" });
         console.log(`✅ Video Blob created. Size: ${videoBlob.size} bytes`);
-        recordedChunks.current = []; // Limpiar chunks después de usar
+        recordedChunks.current = [];
     } else {
         console.warn("No recorded video chunks available to finalize. Video Blob will be null.");
     }
 
-    // --- USANDO messagesRef.current PARA ACCEDER AL VALOR MÁS RECIENTE DE LA TRANSCRIPCIÓN ---
-    // Asegurarse de que messagesRef.current sea un array. El `?? []` ayuda si es null/undefined.
-    const currentMessages = messagesRef.current || [];
-    const userTranscript = currentMessages.filter(msg => msg.sender === MessageSender.CLIENT).map(msg => msg.content).join('\n');
-    const avatarTranscript = currentMessages.filter(msg => msg.sender === MessageSender.AVATAR).map(msg => msg.content).join('\n');
+    // Use sessionMessages which is passed as the latest snapshot
+    const userTranscript = (Array.isArray(sessionMessages) ? sessionMessages : [])
+                            .filter(msg => msg && msg.sender === MessageSender.CLIENT)
+                            .map(msg => msg.content || "")
+                            .join('\n');
+    const avatarTranscript = (Array.isArray(sessionMessages) ? sessionMessages : [])
+                              .filter(msg => msg && msg.sender === MessageSender.AVATAR)
+                              .map(msg => msg.content || "")
+                              .join('\n');
     const duration = 480 - recordingTimer;
 
     console.log(`📊 Transcripción del Usuario (longitud: ${userTranscript.length}): '${userTranscript.substring(0, Math.min(userTranscript.length, 100))}'`);
     console.log(`📊 Transcripción del Avatar (longitud: ${avatarTranscript.length}): '${avatarTranscript.substring(0, Math.min(avatarTranscript.length, 100))}'`);
-    // --- FIN LOG ---
 
     const flaskApiUrl = process.env.NEXT_PUBLIC_FLASK_API_URL;
 
-    const processingDiv = document.createElement("div");
-    processingDiv.id = "ia-waiting-overlay";
-    processingDiv.style.cssText = `
+    const simpleProcessingDiv = document.createElement("div");
+    simpleProcessingDiv.id = "simple-processing-overlay";
+    simpleProcessingDiv.style.cssText = `
       position: fixed; top: 0; left: 0; width: 100%; height: 100%;
       background-color: rgba(0,0,0,0.9); display: flex; flex-direction: column;
       align-items: center; justify-content: center; z-index: 10000; color: white;
-      text-align: center;
+      text-align: center; font-size: 1.5em;
     `;
-    document.body.appendChild(processingDiv);
+    simpleProcessingDiv.innerHTML = `
+      <div class="loader" style="border: 6px solid #f3f3f3; border-top: 6px solid #00e0ff; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin-bottom: 20px;"></div>
+      <span>Registrando sesión...</span>
+    `;
+    document.body.appendChild(simpleProcessingDiv);
 
-    const iaBar = document.getElementById("ia-bar");
-    const iaText = document.getElementById("ia-progress-text");
-    let currentProgress = 0;
-
-    const updateSimulatedProgress = (stepName: string, targetPercentage: number) => {
-      return new Promise<void>(resolve => {
-        const stepIncrement = (targetPercentage - currentProgress) / 10;
-        const intervalDuration = 200;
-        const simInterval = setInterval(() => {
-          currentProgress += stepIncrement;
-          if (currentProgress >= targetPercentage) {
-            currentProgress = targetPercentage;
-            clearInterval(simInterval);
-          }
-          if (iaBar) iaBar.style.width = `${Math.round(currentProgress)}%`;
-          if (iaText) iaText.textContent = `${stepName} ${Math.round(currentProgress)}%`;
-          if (currentProgress === targetPercentage) resolve();
-        }, intervalDuration);
-      });
-    };
 
     let videoS3Key: string | null = null;
     try {
       if (videoBlob) {
-        await updateSimulatedProgress("Subiendo video...", 30);
+        console.log("Attempting to upload recording to Flask...");
         const videoFormData = new FormData();
         videoFormData.append('video', videoBlob, "user_recording.webm");
         videoFormData.append('name', name || 'unknown');
         videoFormData.append('email', email || 'unknown');
 
-        console.log("Attempting to upload recording to Flask /upload_video...");
         const uploadRes = await fetch(`${flaskApiUrl}/upload_video`, {
           method: "POST",
           body: videoFormData,
@@ -230,16 +208,13 @@ function InteractiveSessionContent() {
           const errorText = await uploadRes.text();
           console.error("❌ Error al subir grabación a Flask /upload_video:", uploadRes.status, errorText);
           alert("⚠️ Problema al subir el video. Consulta la consola para más detalles.");
-          // Si falla la subida de video, es mejor no intentar loguear una sesión sin video.
-          isFinalizingRef.current = false; // Reset para permitir reintento
+          isFinalizingRef.current = false;
           return;
         }
       } else {
         console.warn("No video blob to upload, skipping /upload_video call.");
         await updateSimulatedProgress("Saltando subida de video (sin video)...", 30);
       }
-
-      await updateSimulatedProgress("Enviando registro de sesión para análisis...", 60);
 
       console.log("Attempting to send session log to Flask /log_full_session...");
       const sessionLogRes = await fetch(`${flaskApiUrl}/log_full_session`, {
@@ -249,10 +224,10 @@ function InteractiveSessionContent() {
           name: name,
           email: email,
           scenario: scenario,
-          conversation: userTranscript, // Enviar transcripción real del usuario
-          avatar_transcript: avatarTranscript, // Enviar transcripción real del avatar
+          conversation: userTranscript,
+          avatar_transcript: avatarTranscript,
           duration: duration,
-          video_object_key: videoS3Key // Pass the S3 key obtained from /upload_video
+          video_object_key: videoS3Key
         })
       });
 
@@ -271,13 +246,12 @@ function InteractiveSessionContent() {
       alert("❌ Error de red durante el proceso de finalización de la sesión.");
     } finally {
       await updateSimulatedProgress("Redirigiendo al Dashboard...", 100);
-      document.getElementById("ia-waiting-overlay")?.remove();
+      document.getElementById("simple-processing-overlay")?.remove();
       router.push('/dashboard');
     }
   });
 
 
-  // --- EFECTO PARA ACCEDER A LA CÁMARA DEL USUARIO Y CONFIGURAR EL PREVIEW ---
   useEffect(() => {
     if (!isBrowser || !navigator.mediaDevices?.getUserMedia) {
       console.warn("Browser does not support getUserMedia or is not a browser environment.");
@@ -294,31 +268,30 @@ function InteractiveSessionContent() {
                 frameRate: { ideal: 15, max: 15 }
             }
         });
-        localUserStreamRef.current = stream; // Guardar el stream en la referencia
+        localUserStreamRef.current = stream;
         if (userCameraRef.current) {
           userCameraRef.current.srcObject = stream;
         }
-        setHasUserMediaPermission(true); // Habilitar los botones de inicio
-        setShowAutoplayBlockedMessage(false); // Limpiar cualquier mensaje de bloqueo previo
+        setHasUserMediaPermission(true);
+        setShowAutoplayBlockedMessage(false);
         console.log("🎥 User camera preview stream acquired and permissions granted.");
       } catch (error: any) {
         console.error("❌ No se pudo acceder a la cámara del usuario para la vista previa o grabación:", error);
-        setHasUserMediaPermission(false); // Deshabilitar botones
-        setShowAutoplayBlockedMessage(true); // Mostrar mensaje de bloqueo
+        setHasUserMediaPermission(false);
+        setShowAutoplayBlockedMessage(true);
       }
     };
 
     getUserMediaStream();
 
     return () => {
-        if (!isFinalizingRef.current) { // Solo limpiar si no estamos ya en el proceso de finalización
+        if (!isFinalizingRef.current) {
             console.log("useEffect cleanup: Deteniendo medios locales (no finalizando).");
             stopUserCameraRecording();
         }
     };
-  }, [stopUserCameraRecording, isFinalizingRef]); // Se ejecuta solo una vez al montar
+  }, [stopUserCameraRecording, isFinalizingRef]);
 
-  // --- EFECTO PARA INICIAR LA GRABACIÓN DEL USUARIO CUANDO LA SESIÓN DE HEYGEN ESTÁ CONECTADA ---
   useEffect(() => {
     if (sessionState === StreamingAvatarSessionState.CONNECTED && hasUserMediaPermission && !mediaRecorderRef.current) {
         console.log("HeyGen Session CONNECTED. Attempting to start user recording.");
@@ -326,7 +299,6 @@ function InteractiveSessionContent() {
     }
   }, [sessionState, hasUserMediaPermission, mediaRecorderRef, startUserCameraRecording]);
 
-  // Function to fetch HeyGen access token
   const fetchAccessToken = useCallback(async () => {
     try {
       console.log("Fetching access token...");
@@ -346,7 +318,6 @@ function InteractiveSessionContent() {
     }
   }, []);
 
-  // Memoized function to start the HeyGen avatar session (user-triggered)
   const startHeyGenSession = useMemoizedFn(async (startWithVoice: boolean) => {
     console.log(`startHeyGenSession called. startWithVoice: ${startWithVoice}. Current sessionState: ${sessionState}`);
     setIsAttemptingAutoStart(true);
@@ -369,7 +340,7 @@ function InteractiveSessionContent() {
         console.log("HeyGen Stream disconnected.");
         if (!isFinalizingRef.current) {
             console.log("Stream desconectado inesperadamente. Disparando finalización.");
-            stopAndFinalizeSession();
+            stopAndFinalizeSession(messagesRef.current); // Pass current messages to stopAndFinalizeSession
         }
       });
       avatar.on(StreamingEvents.STREAM_READY, (event) => {
@@ -379,33 +350,33 @@ function InteractiveSessionContent() {
       });
       avatar.on(StreamingEvents.USER_START, (event) => console.log(">>>>> User started talking:", event));
       avatar.on(StreamingEvents.USER_STOP, () => console.log(">>>>> User stopped talking."));
-      avatar.on(StreamingEvents.USER_END_MESSAGE, (event) => {
-        // --- LOG DE DIAGNÓSTICO ---
-        console.log("HeyGen: USER_END_MESSAGE event received. Current messagesRef.current (User):", (messagesRef.current || []).filter(msg => msg.sender === MessageSender.CLIENT).map(msg => msg.content));
-        // --- FIN LOG ---
+      
+      // Removed filter/map from console.log to prevent TypeError
+      // Passed 'event' as the parameter, and access 'event.message'
+      avatar.on(StreamingEvents.USER_END_MESSAGE, (event) => { // Changed (message) to (event)
+        console.log("HeyGen: USER_END_MESSAGE event received. Message:", event.message); // Log event.message
+        handleUserTalkingMessage({ detail: { message: event.message || "" } }); // Pass as { detail: { message: string } }
       });
-      avatar.on(StreamingEvents.USER_TALKING_MESSAGE, (event) => {
-        // --- LOG DE DIAGNÓSTICO ---
-        console.log("HeyGen: USER_TALKING_MESSAGE event received. Message:", event.message, typeof event.message);
-        // --- FIN LOG ---
+      avatar.on(StreamingEvents.USER_TALKING_MESSAGE, (event) => { // Changed (message) to (event)
+        console.log("HeyGen: USER_TALKING_MESSAGE event received. Message:", event.message); // Log event.message
+        handleUserTalkingMessage({ detail: { message: event.message || "" } }); // Pass as { detail: { message: string } }
       });
-      avatar.on(StreamingEvents.AVATAR_TALKING_MESSAGE, (event) => {
-        // --- LOG DE DIAGNÓSTICO ---
-        console.log("HeyGen: AVATAR_TALKING_MESSAGE event received. Message:", event.message, typeof event.message);
-        // --- FIN LOG ---
+      avatar.on(StreamingEvents.AVATAR_TALKING_MESSAGE, (event) => { // Changed (message) to (event)
+        console.log("HeyGen: AVATAR_TALKING_MESSAGE event received. Message:", event.message); // Log event.message
+        handleStreamingTalkingMessage({ detail: { message: event.message || "" } }); // Pass as { detail: { message: string } }
       });
-      avatar.on(StreamingEvents.AVATAR_END_MESSAGE, (event) => {
-        // --- LOG DE DIAGNÓSTICO ---
-        console.log("HeyGen: AVATAR_END_MESSAGE event received. Current messagesRef.current (Avatar):", (messagesRef.current || []).filter(msg => msg.sender === MessageSender.AVATAR).map(msg => msg.content));
-        // --- FIN LOG ---
+      avatar.on(StreamingEvents.AVATAR_END_MESSAGE, (event) => { // Changed (message) to (event)
+        console.log("HeyGen: AVATAR_END_MESSAGE event received. Message:", event.message); // Log event.message
+        handleStreamingTalkingMessage({ detail: { message: event.message || "" } }); // Pass as { detail: { message: string } }
       });
+
       avatar.on(
         StreamingEvents.CONNECTION_QUALITY_CHANGED,
         ({ detail }) => {
           console.log("Connection quality changed:", detail);
         }
       );
-
+      
       console.log("Attempting to start Avatar video with config:", config);
       await startAvatar(config);
 
@@ -436,8 +407,9 @@ function InteractiveSessionContent() {
  useUnmount(() => {
   console.log("Component unmounting. Ensuring all streams/recorders are stopped.");
   if (!isFinalizingRef.current && sessionState === StreamingAvatarSessionState.CONNECTED) {
+      // Pass the current messages from the ref during unmount cleanup
       console.log("useUnmount: Sesión CONECTADA y no finalizada explícitamente. Disparando FINALIZACIÓN GRACIAS A UNMOUNT.");
-      stopAndFinalizeSession();
+      stopAndFinalizeSession(messagesRef.current); // Pass current messages to stopAndFinalizeSession
   } else if (!isFinalizingRef.current) {
       console.log("useUnmount: Sesión NO CONECTADA o ya finalizando. Solo deteniendo medios locales y avatar.");
       stopUserCameraRecording();
@@ -447,7 +419,6 @@ function InteractiveSessionContent() {
   }
 });
 
-  // Effect to handle HeyGen avatar stream video playback (Autoplay handling)
   useEffect(() => {
     if (stream && mediaStreamRef.current) {
       mediaStreamRef.current.srcObject = stream;
@@ -466,7 +437,6 @@ function InteractiveSessionContent() {
     }
   }, [mediaStreamRef, stream, stopAvatar]);
 
-  // Effect to re-attempt playback if avatar video is paused/stuck after connection
   useEffect(() => {
     if (sessionState === StreamingAvatarSessionState.CONNECTED && stream && mediaStreamRef.current) {
       const videoElement = mediaStreamRef.current;
@@ -480,7 +450,6 @@ function InteractiveSessionContent() {
     }
   }, [sessionState, stream]);
 
-  // Effect for recording timer
   useEffect(() => {
     let interval: NodeJS.Timeout;
     if (sessionState === StreamingAvatarSessionState.CONNECTED) {
@@ -489,7 +458,7 @@ function InteractiveSessionContent() {
           if (prev <= 1) {
             clearInterval(interval);
             console.log("⏰ Tiempo agotado. Deteniendo y finalizando sesión.");
-            stopAndFinalizeSession();
+            stopAndFinalizeSession(messagesRef.current); // Pass messages here
             return 0;
           }
           return prev - 1;
@@ -502,19 +471,18 @@ function InteractiveSessionContent() {
     };
   }, [sessionState, stopAndFinalizeSession]);
 
-  // Function for the user to retry the session start or activate voice if autoplay was blocked
   const handleAutoplayRetry = useMemoizedFn(async () => {
     console.log("handleAutoplayRetry triggered by user click.");
     setShowAutoplayBlockedMessage(false);
 
-    if (hasUserMediaPermission) {
-        await startHeyGenSession(true);
-    } else {
+    if (!hasUserMediaPermission) {
         alert("Por favor, permite el acceso a la cámara y el micrófono cuando se te solicite para habilitar la sesión.");
+        return;
     }
+    // Attempt to restart session only if permissions are already granted
+    await startHeyGenSession(true);
   });
 
-  // Format timer for display
   const formatTime = (seconds: number) => {
     const minutes = Math.floor(seconds / 60);
     const remainingSeconds = seconds % 60;
@@ -620,7 +588,7 @@ function InteractiveSessionContent() {
           // Mostrar AvatarControls y el botón de Finalizar Sesión cuando está CONECTADO
           <>
             <AvatarControls />
-            <Button onClick={stopAndFinalizeSession} className="bg-red-600 hover:bg-red-700">
+            <Button onClick={() => stopAndFinalizeSession(messagesRef.current)} className="bg-red-600 hover:bg-red-700"> {/* Pass messages here */}
               Finalizar Sesión
             </Button>
           </>

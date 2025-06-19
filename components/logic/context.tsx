@@ -1,10 +1,10 @@
-// File: stephaneavril/leo_api/LEO_API-b913b081323a85b5938124f7a062b68789831888/components/logic/context.tsx
+// File: stephaneavril/leo_api/LEO_API-41312fbadb4af8d7b7904b3ffb825896429b306c/components/logic/context.tsx
 import StreamingAvatar, {
   ConnectionQuality,
   StreamingTalkingMessageEvent,
   UserTalkingMessageEvent,
 } from "@heygen/streaming-avatar";
-import React, { useRef, useState } from "react";
+import React, { useRef, useState, useCallback } from "react";
 
 export enum StreamingAvatarSessionState {
   INACTIVE = "inactive",
@@ -126,72 +126,94 @@ const useStreamingAvatarMessageState = () => {
   const [messages, setMessages] = useState<Message[]>([]);
   const currentSenderRef = useRef<MessageSender | null>(null);
 
-  const handleUserTalkingMessage = ({
+  const handleUserTalkingMessage = useCallback(({
     detail,
   }: {
     detail: UserTalkingMessageEvent;
   }) => {
-    // Asegurarse de que detail.message no sea undefined
-    const messageContent = detail.message || "";
-    if (currentSenderRef.current === MessageSender.CLIENT) {
-      setMessages((prev) => [
-        ...prev.slice(0, -1),
-        {
-          ...prev[prev.length - 1],
-          content: [prev[prev.length - 1].content, messageContent].join(""),
-        },
-      ]);
-    } else {
-      currentSenderRef.current = MessageSender.CLIENT;
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: Date.now().toString(),
-          sender: MessageSender.CLIENT,
-          content: messageContent,
-        },
-      ]);
-    }
-  };
+    console.log('Context: handleUserTalkingMessage - Raw detail:', detail); // NEW DEBUG LOG
+    const messageContent = typeof detail.message === 'string' ? detail.message : ''; // Ensure string or empty
+    console.log('Context: handleUserTalkingMessage - Processed messageContent:', messageContent); // NEW DEBUG LOG
+    
+    setMessages((prev) => {
+      const safePrev = Array.isArray(prev) ? prev : [];
+      
+      if (currentSenderRef.current === MessageSender.CLIENT && safePrev.length > 0) {
+        const lastMessage = safePrev[safePrev.length - 1];
+        const lastContent = typeof lastMessage?.content === 'string' ? lastMessage.content : ''; // Safely get content as string
+        console.log('Context: Appending user message:', messageContent, 'to last:', lastContent); // DEBUG LOG
+        return [
+          ...safePrev.slice(0, -1),
+          {
+            ...lastMessage, // Keep other properties of the last message
+            content: [lastContent, messageContent].join(""), // Concatenate safely
+          },
+        ];
+      } else {
+        console.log('Context: Adding new user message:', messageContent); // DEBUG LOG
+        currentSenderRef.current = MessageSender.CLIENT;
+        return [
+          ...safePrev,
+          {
+            id: Date.now().toString(),
+            sender: MessageSender.CLIENT,
+            content: messageContent,
+          },
+        ];
+      }
+    });
+  }, []);
 
-  const handleStreamingTalkingMessage = ({
+  const handleStreamingTalkingMessage = useCallback(({
     detail,
   }: {
     detail: StreamingTalkingMessageEvent;
   }) => {
-    // Asegurarse de que detail.message no sea undefined
-    const messageContent = detail.message || "";
-    if (currentSenderRef.current === MessageSender.AVATAR) {
-      setMessages((prev) => [
-        ...prev.slice(0, -1),
-        {
-          ...prev[prev.length - 1],
-          content: [prev[prev.length - 1].content, messageContent].join(""),
-        },
-      ]);
-    } else {
-      currentSenderRef.current = MessageSender.AVATAR;
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: Date.now().toString(),
-          sender: MessageSender.AVATAR,
-          content: messageContent,
-        },
-      ]);
-    }
-  };
+    console.log('Context: handleStreamingTalkingMessage - Raw detail:', detail); // NEW DEBUG LOG
+    const messageContent = typeof detail.message === 'string' ? detail.message : ''; // Ensure string or empty
+    console.log('Context: handleStreamingTalkingMessage - Processed messageContent:', messageContent); // NEW DEBUG LOG
 
-  const handleEndMessage = () => {
+    setMessages((prev) => {
+      const safePrev = Array.isArray(prev) ? prev : [];
+
+      if (currentSenderRef.current === MessageSender.AVATAR && safePrev.length > 0) {
+        const lastMessage = safePrev[safePrev.length - 1];
+        const lastContent = typeof lastMessage?.content === 'string' ? lastMessage.content : ''; // Safely get content as string
+        console.log('Context: Appending avatar message:', messageContent, 'to last:', lastContent); // DEBUG LOG
+        return [
+          ...safePrev.slice(0, -1),
+          {
+            ...lastMessage, // Keep other properties of the last message
+            content: [lastContent, messageContent].join(""), // Concatenate safely
+          },
+        ];
+      } else {
+        console.log('Context: Adding new avatar message:', messageContent); // DEBUG LOG
+        currentSenderRef.current = MessageSender.AVATAR;
+        return [
+          ...safePrev,
+          {
+            id: Date.now().toString(),
+            sender: MessageSender.AVATAR,
+            content: messageContent,
+          },
+        ];
+      }
+    });
+  }, []);
+
+  const handleEndMessage = useCallback(() => {
+    console.log('Context: handleEndMessage called.');
     currentSenderRef.current = null;
-  };
+  }, []);
 
   return {
     messages,
-    clearMessages: () => {
+    clearMessages: useCallback(() => {
+      console.log('Context: clearMessages called.');
       setMessages([]);
       currentSenderRef.current = null;
-    },
+    }, []),
     handleUserTalkingMessage,
     handleStreamingTalkingMessage,
     handleEndMessage,
@@ -231,10 +253,10 @@ export const StreamingAvatarProvider = ({
   children: React.ReactNode;
   basePath?: string;
 }) => {
-  const avatarRef = React.useRef<StreamingAvatar>(null);
+  const avatarRef = React.useRef<StreamingAvatar | null>(null); 
   const voiceChatState = useStreamingAvatarVoiceChatState();
   const sessionState = useStreamingAvatarSessionState();
-  const messageState = useStreamingAvatarMessageState(); // Renombrado a messageState
+  const messageState = useStreamingAvatarMessageState(); 
   const listeningState = useStreamingAvatarListeningState();
   const talkingState = useStreamingAvatarTalkingState();
   const connectionQualityState = useStreamingAvatarConnectionQualityState();
@@ -246,7 +268,7 @@ export const StreamingAvatarProvider = ({
         basePath,
         ...voiceChatState,
         ...sessionState,
-        ...messageState, // Usar messageState
+        ...messageState, 
         ...listeningState,
         ...talkingState,
         ...connectionQualityState,

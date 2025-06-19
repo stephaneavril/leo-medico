@@ -1,9 +1,9 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta charset="UTF-8">
   <title>Entrenamiento Leo - Ingreso</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <style>
     body {
       background-color: #0c0e2c;
@@ -52,12 +52,11 @@
 </head>
 <body>
 
-  <form action="/dashboard" method="POST">
-    <h1>🧠 Entrenamiento Virtual con Leo</h1>
+  <form action="/start-session" method="POST"> <h1>🧠 Entrenamiento Virtual con Leo</h1>
     <input type="text" name="name" placeholder="Tu nombre" required><br>
     <input type="email" name="email" placeholder="Correo electrónico" required><br>
     <input type="text" name="token" placeholder="Tu código de acceso" required><br>
-    <button type="submit">Comenzar</button>
+    <input type="hidden" name="scenario" value="Entrevista con médico"> <button type="submit">Comenzar</button>
   </form>
 <footer>
     <p>Desarrollado por <a href="https://www.teams.com.mx" target="_blank">Teams</a> &copy; 2025</p>
