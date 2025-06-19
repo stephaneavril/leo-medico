@@ -18,7 +18,7 @@ export enum MessageSender {
 }
 
 export interface Message {
-  id: string; // Add id for unique key in lists
+  id: string;
   sender: MessageSender;
   content: string;
 }
@@ -131,12 +131,14 @@ const useStreamingAvatarMessageState = () => {
   }: {
     detail: UserTalkingMessageEvent;
   }) => {
+    // Asegurarse de que detail.message no sea undefined
+    const messageContent = detail.message || "";
     if (currentSenderRef.current === MessageSender.CLIENT) {
       setMessages((prev) => [
         ...prev.slice(0, -1),
         {
           ...prev[prev.length - 1],
-          content: [prev[prev.length - 1].content, detail.message].join(""),
+          content: [prev[prev.length - 1].content, messageContent].join(""),
         },
       ]);
     } else {
@@ -144,9 +146,9 @@ const useStreamingAvatarMessageState = () => {
       setMessages((prev) => [
         ...prev,
         {
-          id: Date.now().toString(), // Ensure unique ID for new messages
+          id: Date.now().toString(),
           sender: MessageSender.CLIENT,
-          content: detail.message,
+          content: messageContent,
         },
       ]);
     }
@@ -157,12 +159,14 @@ const useStreamingAvatarMessageState = () => {
   }: {
     detail: StreamingTalkingMessageEvent;
   }) => {
+    // Asegurarse de que detail.message no sea undefined
+    const messageContent = detail.message || "";
     if (currentSenderRef.current === MessageSender.AVATAR) {
       setMessages((prev) => [
         ...prev.slice(0, -1),
         {
           ...prev[prev.length - 1],
-          content: [prev[prev.length - 1].content, detail.message].join(""),
+          content: [prev[prev.length - 1].content, messageContent].join(""),
         },
       ]);
     } else {
@@ -170,9 +174,9 @@ const useStreamingAvatarMessageState = () => {
       setMessages((prev) => [
         ...prev,
         {
-          id: Date.now().toString(), // Ensure unique ID for new messages
+          id: Date.now().toString(),
           sender: MessageSender.AVATAR,
-          content: detail.message,
+          content: messageContent,
         },
       ]);
     }
@@ -230,7 +234,7 @@ export const StreamingAvatarProvider = ({
   const avatarRef = React.useRef<StreamingAvatar>(null);
   const voiceChatState = useStreamingAvatarVoiceChatState();
   const sessionState = useStreamingAvatarSessionState();
-  const messageState = useStreamingAvatarMessageState();
+  const messageState = useStreamingAvatarMessageState(); // Renombrado a messageState
   const listeningState = useStreamingAvatarListeningState();
   const talkingState = useStreamingAvatarTalkingState();
   const connectionQualityState = useStreamingAvatarConnectionQualityState();
@@ -242,7 +246,7 @@ export const StreamingAvatarProvider = ({
         basePath,
         ...voiceChatState,
         ...sessionState,
-        ...messageState,
+        ...messageState, // Usar messageState
         ...listeningState,
         ...talkingState,
         ...connectionQualityState,
