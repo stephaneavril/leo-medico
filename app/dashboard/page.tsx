@@ -1,4 +1,4 @@
-// File: C:\Users\avril\OneDrive\Escritorio\LEO_API\InteractiveAvatarNextJSDemo-main\app\dashboard\page.tsx
+// File: app/dashboard/page.tsx
 'use client';
 
 import { useEffect, useState } from 'react';
@@ -8,11 +8,11 @@ import Link from 'next/link';
 
 interface SessionRecord {
   scenario: string;
-  message: string; // User's message
-  evaluation: string; // Public AI summary
-  audio_path: string | null; // S3 video URL
-  timestamp: string;
-  tip: string; // Personalized tip
+  user_transcript: string; // Corrected to match Flask's 'message' alias 'user_transcript'
+  coach_advice: string; // Corrected to match Flask's 'evaluation' alias 'coach_advice'
+  video_s3: string | null; // Corrected to match Flask's 'audio_path' alias 'video_s3'
+  created_at: string; // Corrected to match Flask's 'timestamp' alias 'created_at'
+  tip: string;
   visual_feedback: string;
 }
 
@@ -51,14 +51,9 @@ export default function DashboardPage() {
         });
 
         if (response.ok) {
-        const data = await response.json();
-       // ⬅️ 1. Siempre inicializar con array vacío si viene undefined o null
-        setRecords(Array.isArray(data.records) ? data.records : []);
-
-         // ⬅️ 2. Si el backend no manda número, forzamos 0
-        setUsedSeconds(
-          typeof data.used_seconds === 'number' ? data.used_seconds : 0
-         );
+          const data = await response.json();
+          setRecords(Array.isArray(data.sessions) ? data.sessions : []);
+          setUsedSeconds(typeof data.used_seconds === 'number' ? data.used_seconds : 0);
         } else {
           const errorText = await response.text();
           console.error('Error fetching dashboard data:', errorText);
@@ -67,7 +62,6 @@ export default function DashboardPage() {
         }
       } catch (error) {
         console.error('Network error fetching dashboard data:', error);
-        setRecords([]);
         alert('Error de red al cargar el dashboard. Intenta de nuevo.');
         router.push('/');
       }
@@ -110,7 +104,6 @@ export default function DashboardPage() {
               <li>👨‍⚕️ Una vez conectado, haz clic en el micrófono en la ventana del avatar y comienza la conversación médica.</li>
               <li>🗣️ Habla con claridad y presenta tu producto de forma profesional.</li>
               <li>🤫 Cuando termines de hablar, espera la respuesta del Dr. Leo, él sabe cuándo contestar.</li>
-              <li>🎤 Si quieres volver a hablar, haz clic otra vez en el micro de la ventana del doctor y continúa.</li>
               <li>🎯 Sigue el modelo de ventas <strong>Da Vinci</strong>: saludo, necesidad, propuesta, cierre.</li>
             </ul>
             <p className="mt-4 text-sm">Tu sesión será evaluada automáticamente por IA. ¡Aprovecha cada minuto!</p>
@@ -182,10 +175,12 @@ export default function DashboardPage() {
             records.map((r, index) => (
               <div key={index} className="session-entry bg-zinc-800 p-5 rounded-lg shadow-md mb-4">
                 <p className="text-lg font-semibold text-blue-300">Escenario: {r.scenario}</p>
-                <p className="text-zinc-400 text-sm">Fecha: {r.timestamp}</p>
+                {/* Use r.created_at as the timestamp field from Flask */}
+                <p className="text-zinc-400 text-sm">Fecha: {r.created_at}</p>
                 <p className="mt-3 text-zinc-300"><strong>Resumen IA:</strong></p>
                 <div className="mt-1 mb-3 p-3 bg-zinc-700 rounded text-zinc-200 text-sm">
-                  <em>{r.evaluation}</em>
+                  {/* Use r.coach_advice which is the alias for evaluation from Flask */}
+                  <em>{r.coach_advice}</em>
                 </div>
 
                 {r.tip && (
@@ -196,29 +191,30 @@ export default function DashboardPage() {
                 )}
                  {r.visual_feedback && (
                   <div className="mt-3 p-3 bg-blue-900 bg-opacity-30 border-l-4 border-blue-500 rounded text-zinc-200 text-sm">
-                        <strong>👁️ Retroalimentación Visual:</strong>
-                        <p className="mt-1">{r.visual_feedback}</p>
-                      </div>
-                    )}
-                     {r.audio_path && r.audio_path !== "Video_Not_Available_Error" && r.audio_path !== "Video_Processing_Failed" && r.audio_path !== "Video_Missing_Error" && (
-                        <div className="mt-4">
-                            <video controls className="w-full md:max-w-xl mx-auto rounded-lg shadow-md border border-zinc-600">
-                                <source src={r.audio_path} type="video/mp4" />
-                                Tu navegador no soporta la reproducción de video.
-                            </video>
-                        </div>
-                    )}
+                    <strong>👁️ Retroalimentación Visual:</strong>
+                    <p className="mt-1">{r.visual_feedback}</p>
                   </div>
-                ))
-              ) : (
-                <p className="text-zinc-400 text-center">No has realizado sesiones todavía. ¡Comienza una con Leo!</p>
-              )}
-            </div>
-          </div>
-
-          <footer className="mt-10 mb-5 text-sm text-zinc-500 text-center">
-            <p>Desarrollado por <a href="https://www.teams.com.mx" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">Teams</a> &copy; 2025</p>
-          </footer>
+                )}
+                {/* Use r.video_s3 which is the alias for audio_path from Flask */}
+                 {r.video_s3 && r.video_s3 !== "Video_Not_Available_Error" && r.video_s3 !== "Video_Processing_Failed" && r.video_s3 !== "Video_Missing_Error" && (
+                    <div className="mt-4">
+                        <video controls className="w-full md:max-w-xl mx-auto rounded-lg shadow-md border border-zinc-600">
+                            <source src={r.video_s3} type="video/mp4" />
+                            Tu navegador no soporta la reproducción de video.
+                        </video>
+                    </div>
+                )}
+              </div>
+            ))
+          ) : (
+            <p className="text-zinc-400 text-center">No has realizado sesiones todavía. ¡Comienza una con Leo!</p>
+          )}
         </div>
-      );
-    }
+      </div>
+
+      <footer className="mt-10 mb-5 text-sm text-zinc-500 text-center">
+        <p>Desarrollado por <a href="https://www.teams.com.mx" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">Teams</a> © 2025</p>
+      </footer>
+    </div>
+  );
+}

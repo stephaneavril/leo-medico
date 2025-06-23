@@ -13,10 +13,6 @@ from typing import Union
 import openai
 import boto3
 from botocore.exceptions import ClientError
-# No se necesitan subprocess, pandas, matplotlib en el modo simple de Flask si no se usan directamente
-# import subprocess
-# import pandas as pd
-# import matplotlib.pyplot as plt
 
 print("\U0001F680 Iniciando Leo Virtual Trainer (Modo Simple)...")
 
@@ -464,10 +460,10 @@ from flask_cors import cross_origin
 import psycopg2.extras
 
 @app.route("/dashboard_data", methods=["POST"])
-@cross_origin()                       # ← asegura la cabecera CORS en 2xx/4xx/5xx
+@cross_origin()
 def dashboard_data():
     """
-    Espera JSON con:  { "name": "...", "email": "...", "token": "..." }
+    Espera JSON con:  { "name": "...", "email": "..." , "token": "..." }
     Devuelve lista de sesiones grabadas para el usuario autenticado.
     """
     conn = None
@@ -478,34 +474,47 @@ def dashboard_data():
         token  = data.get("token")
 
         # 1) Validación muy básica del usuario
-        if not check_user_token(email, token):        # <— aquí el helper
+        if not check_user_token(email, token):
             return jsonify({"error": "token inválido"}), 401
 
-        # 2) Consulta de sesiones
+        # 2) Consulta de sesiones y cálculo de tiempo en la MISMA transacción/cursor
         conn = get_db_connection()
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            # First query: Fetch sessions
             cur.execute(
                 """
                 SELECT  id,
                         scenario,
-                        created_at,
-                        duration,
-                        user_transcript,
-                        avatar_transcript,
-                        coach_advice,
-                        visual_feedback,
-                        video_s3
-                FROM    sessions
+                        timestamp as created_at,         -- Map 'timestamp' from 'interactions' to 'created_at'
+                        duration_seconds as duration,    -- Map 'duration_seconds' to 'duration'
+                        message as user_transcript,      -- Map 'message' (user input) to 'user_transcript'
+                        response as avatar_transcript,   -- Map 'response' (Leo's response) to 'avatar_transcript'
+                        evaluation as coach_advice,      -- Map 'evaluation' to 'coach_advice'
+                        visual_feedback,                 -- Direct map
+                        audio_path as video_s3           -- Map 'audio_path' (S3 key) to 'video_s3'
+                FROM    interactions                     -- Change table name from 'sessions' to 'interactions'
                 WHERE   email = %s
-                ORDER BY created_at DESC
+                ORDER BY timestamp DESC
                 LIMIT   50;
                 """,
                 (email,),
             )
             sessions = cur.fetchall()
 
-        # 3) OK → JSON
-        return jsonify({"sessions": sessions}), 200
+            # Second query: Calculate total used seconds (using the SAME open cursor)
+            # IMPORTANT FIX: Handle fetchone() possibly returning None
+            cur.execute(
+                """
+                SELECT COALESCE(SUM(duration_seconds), 0)
+                FROM interactions
+                WHERE email = %s;
+                """,
+                (email,)
+            )
+            result = cur.fetchone() # Fetch the result
+            total_used_seconds = result[0] if result is not None else 0 # Safely access element 0
+
+        return jsonify({"sessions": sessions, "used_seconds": total_used_seconds}), 200
 
     except Exception as e:
         app.logger.exception("dashboard_data error")

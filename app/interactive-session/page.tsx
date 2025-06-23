@@ -12,7 +12,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useMemoizedFn, useUnmount } from 'ahooks';
 import { useRouter, useSearchParams } from 'next/navigation';
-import Cookies from 'js-cookie'; // 👈 IMPORTA AL NIVEL DE MÓDULO (fuera del componente)
+import Cookies from 'js-cookie';
 
 import {
   AvatarQuality,
@@ -39,7 +39,7 @@ import { MessageHistory } from '@/components/AvatarSession/MessageHistory';
 
 /*******************************
  * CONFIG POR DEFECTO DEL BOT  *
- *******************************/
+*******************************/
 const DEFAULT_CONFIG: StartAvatarRequest = {
   quality: AvatarQuality.Low,
   avatarName: 'Ann_Doctor_Standing2_public',
@@ -86,6 +86,10 @@ function InteractiveSessionContent() {
   const [showDocPanel, setShowDocPanel] = useState(false);
   const [hasUserMediaPermission, setHasUserMediaPermission] = useState(false);
 
+  // NEW: State to track if component has mounted (client-side)
+  const [mounted, setMounted] = useState(false);
+
+
   /****************************** REFS ******************************/
   const messagesRef = useRef<any[]>([]);
   useEffect(() => {
@@ -98,6 +102,11 @@ function InteractiveSessionContent() {
   const userCameraRef = useRef<HTMLVideoElement>(null);
   const avatarVideoRef = useRef<HTMLVideoElement>(null);
   const isFinalizingRef = useRef(false);
+
+  // NEW: Effect to set mounted to true after the first render (on client)
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   /********************** HELPERS GRABACIÓN USUARIO **********************/
   const stopUserCameraRecording = useCallback(() => {
@@ -209,12 +218,9 @@ function InteractiveSessionContent() {
         audio: true,
       });
 
-      if (!isMounted) return;               // el componente podría
-                                            // desmontarse en medio
+      if (!isMounted) return;               
       localUserStreamRef.current = stream;
 
-      /* 👇 asegura que el video <video ref={userCameraRef} … />       *
-       * ya existe antes de intentar asignarle la cámara               */
       if (userCameraRef.current) {
         userCameraRef.current.srcObject = stream;
       }
@@ -227,7 +233,7 @@ function InteractiveSessionContent() {
 
   enableMedia();
 
-  return () => {           // limpieza
+  return () => {           
     isMounted = false;
     localUserStreamRef.current?.getTracks().forEach(t => t.stop());
   };
@@ -342,108 +348,117 @@ function InteractiveSessionContent() {
   const toggleDocPanel = () => setShowDocPanel((v) => !v);
 
   /***************************** RENDER *****************************/
-  if (!name || !email || !scenario || !userToken) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-zinc-900 text-white">
-        Error: falta información de usuario. Intentando redirigir…
-      </div>
-    );
-  }
+  // Determine the scenario text for consistent rendering.
+  // We use `mounted` to render the dynamic part only after hydration on the client.
+  const scenarioText = mounted ? (scenario || "N/A") : "Cargando..."; 
 
   return (
+    // Main application container - its classNames should match the conditional render above
     <div className="w-screen h-screen flex flex-col items-center bg-zinc-900 text-white relative">
-      <h1 className="text-3xl font-bold text-blue-400 mt-6 mb-4">🧠 Leo – {scenario}</h1>
+        {/* The h1 will now always render a consistent string on the server. */}
+        {/* suppressHydrationWarning tells React to ignore differences in this element after initial render. */}
+        <h1 className="text-3xl font-bold text-blue-400 mt-6 mb-4" suppressHydrationWarning>
+            🧠 Leo – {scenarioText}
+        </h1>
 
-      {sessionState === StreamingAvatarSessionState.INACTIVE && !hasUserMediaPermission && !showAutoplayBlockedMessage && (
-        <p className="text-zinc-300 mb-6">Solicitando permisos de cámara & micrófono…</p>
-      )}
-      {showAutoplayBlockedMessage && (
-        <p className="text-red-400 mb-6">Permisos denegados o autoplay bloqueado.</p>
-      )}
+        {/* Conditional content based on whether user data is available after mounting */}
+        {(!mounted || !name || !email || !scenario || !userToken) ? (
+            <p className="text-zinc-300">Verificando información de usuario y redirigiendo si es necesario.</p>
+        ) : (
+            <>
+                {/* Mensaje de estado inicial de permisos */}
+                {sessionState === StreamingAvatarSessionState.INACTIVE && !hasUserMediaPermission && !showAutoplayBlockedMessage && (
+                  <p className="text-zinc-300 mb-6">Solicitando permisos para cámara y micrófono…</p>
+                )}
+                {showAutoplayBlockedMessage && (
+                  <p className="text-red-400 mb-6">Permisos denegados o autoplay bloqueado.</p>
+                )}
 
-      {/* CONTENEDOR PRINCIPAL */}
-      <div className="relative w-full max-w-4xl flex flex-col md:flex-row gap-5 p-4">
-        {/* VIDEO AVATAR */}
-        <div className="relative w-full md:w-1/2 aspect-video min-h-[300px] bg-zinc-800 rounded-lg overflow-hidden flex items-center justify-center">
-          {sessionState !== StreamingAvatarSessionState.INACTIVE ? (
-            <AvatarVideo ref={avatarVideoRef} />
-          ) : !showAutoplayBlockedMessage && (
-            <AvatarConfig config={config} onConfigChange={setConfig} />
-          )}
+                {/* CONTENEDOR PRINCIPAL */}
+                <div className="relative w-full max-w-4xl flex flex-col md:flex-row gap-5 p-4">
+                  {/* VIDEO AVATAR */}
+                  <div className="relative w-full md:w-1/2 aspect-video min-h-[300px] bg-zinc-800 rounded-lg overflow-hidden flex items-center justify-center">
+                    {sessionState !== StreamingAvatarSessionState.INACTIVE ? (
+                      <AvatarVideo ref={avatarVideoRef} />
+                    ) : !showAutoplayBlockedMessage && (
+                      <AvatarConfig config={config} onConfigChange={setConfig} />
+                    )}
 
-          {showAutoplayBlockedMessage && (
-            <div className="absolute inset-0 bg-black bg-opacity-75 flex flex-col items-center justify-center text-center p-4">
-              <p className="mb-4 text-lg font-semibold">¡Video/audio bloqueados!</p>
-              <Button onClick={handleAutoplayRetry} className="bg-blue-600 hover:bg-blue-700">
-                Habilitar
-              </Button>
-            </div>
-          )}
+                    {showAutoplayBlockedMessage && (
+                      <div className="absolute inset-0 bg-black bg-opacity-75 flex flex-col items-center justify-center text-center p-4">
+                        <p className="mb-4 text-lg font-semibold">¡Video/audio bloqueados!</p>
+                        <Button onClick={handleAutoplayRetry} className="bg-blue-600 hover:bg-blue-700">
+                          Habilitar
+                        </Button>
+                      </div>
+                    )}
 
-          {sessionState === StreamingAvatarSessionState.CONNECTED && (
-            <div className="absolute top-2 left-2 bg-black bg-opacity-70 px-3 py-1 rounded text-sm">
-              {formatTime(recordingTimer)}
-            </div>
-          )}
-          {sessionState === StreamingAvatarSessionState.CONNECTING && !showAutoplayBlockedMessage && (
-            <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50">
-              <LoadingIcon className="w-10 h-10 animate-spin" />
-            </div>
-          )}
-        </div>
+                    {sessionState === StreamingAvatarSessionState.CONNECTED && (
+                      <div className="absolute top-2 left-2 bg-black bg-opacity-70 px-3 py-1 rounded text-sm">
+                        Grabando: {formatTime(recordingTimer)}
+                      </div>
+                    )}
+                    {sessionState === StreamingAvatarSessionState.CONNECTING && !showAutoplayBlockedMessage && (
+                      <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50">
+                        <LoadingIcon className="w-10 h-10 animate-spin" />
+                      </div>
+                    )}
+                  </div>
 
-        {/* VIDEO USUARIO */}
-        <div className="w-full md:w-1/2">
-          <video ref={userCameraRef} autoPlay muted playsInline className="rounded-lg border border-blue-500 w-full aspect-video object-cover bg-black" />
-        </div>
-      </div>
+                  {/* VIDEO USUARIO */}
+                  <div className="w-full md:w-1/2">
+                    <video ref={userCameraRef} autoPlay muted playsInline className="rounded-lg border border-blue-500 w-full aspect-video object-cover bg-black" />
+                  </div>
+                </div>
 
-      {/* CONTROLES */}
-      <div className="flex flex-col items-center gap-4 mt-6 border-t border-zinc-700 w-full p-4">
-        {sessionState === StreamingAvatarSessionState.INACTIVE && !showAutoplayBlockedMessage && (
-          <div className="flex gap-4">
-            <Button onClick={() => startHeyGenSession(true)} disabled={isAttemptingAutoStart || !hasUserMediaPermission}>
-              Iniciar voz
-            </Button>
-            <Button onClick={() => startHeyGenSession(false)} disabled={isAttemptingAutoStart || !hasUserMediaPermission}>
-              Iniciar texto
-            </Button>
-          </div>
-        )}
+                {/* CONTROLES */}
+                <div className="flex flex-col items-center gap-4 mt-6 border-t border-zinc-700 w-full p-4">
+                  {sessionState === StreamingAvatarSessionState.INACTIVE && !showAutoplayBlockedMessage && (
+                    <div className="flex gap-4">
+                      <Button onClick={() => startHeyGenSession(true)} disabled={isAttemptingAutoStart || !hasUserMediaPermission}>
+                        Iniciar voz
+                      </Button>
+                      <Button onClick={() => startHeyGenSession(false)} disabled={isAttemptingAutoStart || !hasUserMediaPermission}>
+                        Iniciar texto
+                      </Button>
+                    </div>
+                  )}
 
-        {sessionState === StreamingAvatarSessionState.CONNECTING && !showAutoplayBlockedMessage && (
-          <div className="flex items-center gap-2 text-white">
-            <LoadingIcon className="w-6 h-6 animate-spin" />
-            <span>Conectando…</span>
-          </div>
-        )}
+                  {sessionState === StreamingAvatarSessionState.CONNECTING && !showAutoplayBlockedMessage && (
+                    <div className="flex items-center gap-2 text-white">
+                      <LoadingIcon className="w-6 h-6 animate-spin" />
+                      <span>Conectando…</span>
+                    </div>
+                  )}
 
-        {sessionState === StreamingAvatarSessionState.CONNECTED && (
-          <>
-            <AvatarControls />
-            <Button onClick={stopAndFinalizeSession} className="bg-red-600 hover:bg-red-700">
-              Finalizar
-            </Button>
-          </>
-        )}
-      </div>
+                  {sessionState === StreamingAvatarSessionState.CONNECTED && (
+                    <>
+                      <AvatarControls />
+                      <Button onClick={stopAndFinalizeSession} className="bg-red-600 hover:bg-red-700">
+                        Finalizar
+                      </Button>
+                    </>
+                  )}
+                </div>
 
-      {sessionState === StreamingAvatarSessionState.CONNECTED && <MessageHistory />}
+                {sessionState === StreamingAvatarSessionState.CONNECTED && <MessageHistory />}
 
-      {/* PANEL DOC */}
-      <button onClick={toggleDocPanel} className="fixed top-5 left-1/2 -translate-x-1/2 bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded-lg shadow-lg">
-        📘 Ver documentación
-      </button>
-      <div className={`fixed top-0 right-0 w-80 h-full bg-zinc-950 border-l-2 border-blue-600 p-5 overflow-y-auto transition-transform duration-300 ${showDocPanel ? 'translate-x-0' : 'translate-x-full'}`}>
-        <h2 className="text-xl font-bold text-blue-400 mb-4">Documentación útil</h2>
-        <p className="text-sm text-zinc-300 mb-2">☑ Saludo ☑ Necesidad ☑ Propuesta ☑ Cierre</p>
-        <p className="text-sm text-zinc-300 mb-2">Objeciones: “Ya uso otro producto” → ¿Qué resultados ha observado?</p>
-        <p className="text-sm text-zinc-300 mb-2">Ética: permitido compartir evidencia válida. Prohibido usos off‑label.</p>
-      </div>
+                {/* PANEL DOC */}
+                <button onClick={toggleDocPanel} className="fixed top-5 left-1/2 -translate-x-1/2 bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded-lg shadow-lg">
+                  📘 Ver documentación
+                </button>
+                <div className={`fixed top-0 right-0 w-80 h-full bg-zinc-950 border-l-2 border-blue-600 p-5 overflow-y-auto transition-transform duration-300 ${showDocPanel ? 'translate-x-0' : 'translate-x-full'}`}>
+                  <h2 className="text-xl font-bold text-blue-400 mb-4">Documentación útil</h2>
+                  <p className="text-sm text-zinc-300 mb-2">☑ Saludo ☑ Necesidad ☑ Propuesta ☑ Cierre</p>
+                  <p className="text-sm text-zinc-300 mb-2">Objeciones: “Ya uso otro producto” → ¿Qué resultados ha observado?</p>
+                  <p className="text-sm text-zinc-300 mb-2">Ética: permitido compartir evidencia válida. Prohibido usos off‑label.</p>
+                </div>
+            </>
+        )} {/* End of conditional rendering based on user data */}
 
-      <footer className="mt-auto mb-5 text-xs text-zinc-500 text-center w-full">
-        Desarrollado por <a href="https://www.teams.com.mx" className="text-blue-400 hover:underline">Teams</a> © 2025
-      </footer>
+        <footer className="mt-auto mb-5 text-xs text-zinc-500 text-center w-full">
+          Desarrollado por <a href="https://www.teams.com.mx" className="text-blue-400 hover:underline">Teams</a> © 2025
+        </footer>
     </div>
   );
 }
