@@ -1,3 +1,4 @@
+// File: C:\Users\avril\OneDrive\Escritorio\LEO_API\InteractiveAvatarNextJSDemo-main\components\logic\useStreamingAvatarSession.ts
 import StreamingAvatar, {
   ConnectionQuality,
   StartAvatarRequest,
@@ -10,7 +11,9 @@ import {
   useStreamingAvatarContext,
 } from "./context";
 import { useVoiceChat } from "./useVoiceChat";
-import { useMessageHistory } from "./useMessageHistory";
+// Si usas useMessageHistory en otros lugares, asegúrate de que no haya importaciones duplicadas.
+// En page.tsx, messages viene directamente de useStreamingAvatarSession,
+// por lo que no necesitas importar useMessageHistory allí.
 
 export const useStreamingAvatarSession = () => {
   const {
@@ -24,14 +27,14 @@ export const useStreamingAvatarSession = () => {
     setIsUserTalking,
     setIsAvatarTalking,
     setConnectionQuality,
-    handleUserTalkingMessage,
-    handleStreamingTalkingMessage,
-    handleEndMessage,
+    // <<<< AHORA SÍ DESTRUCTRURAMOS LAS FUNCIONES Y EL ESTADO 'messages' >>>
+    handleUserTalkingMessage, 
+    handleStreamingTalkingMessage, 
+    handleEndMessage, 
     clearMessages,
+    messages // También obtenemos el estado 'messages' directamente del contexto
   } = useStreamingAvatarContext();
   const { stopVoiceChat } = useVoiceChat();
-
-  useMessageHistory();
 
   const init = useCallback(
     (token: string) => {
@@ -115,16 +118,16 @@ export const useStreamingAvatarSession = () => {
       });
       avatarRef.current.on(
         StreamingEvents.USER_TALKING_MESSAGE,
-        handleUserTalkingMessage,
+        handleUserTalkingMessage, // <<< USANDO LA FUNCIÓN DEL CONTEXTO DIRECTAMENTE
       );
       avatarRef.current.on(
         StreamingEvents.AVATAR_TALKING_MESSAGE,
-        handleStreamingTalkingMessage,
+        handleStreamingTalkingMessage, // <<< USANDO LA FUNCIÓN DEL CONTEXTO DIRECTAMENTE
       );
-      avatarRef.current.on(StreamingEvents.USER_END_MESSAGE, handleEndMessage);
+      avatarRef.current.on(StreamingEvents.USER_END_MESSAGE, handleEndMessage); // <<< USANDO LA FUNCIÓN DEL CONTEXTO DIRECTAMENTE
       avatarRef.current.on(
         StreamingEvents.AVATAR_END_MESSAGE,
-        handleEndMessage,
+        handleEndMessage, // <<< USANDO LA FUNCIÓN DEL CONTEXTO DIRECTAMENTE
       );
 
       await avatarRef.current.createStartAvatar(config);
@@ -140,9 +143,9 @@ export const useStreamingAvatarSession = () => {
       sessionState,
       setConnectionQuality,
       setIsUserTalking,
-      handleUserTalkingMessage,
-      handleStreamingTalkingMessage,
-      handleEndMessage,
+      handleUserTalkingMessage, // Añadido a las dependencias
+      handleStreamingTalkingMessage, // Añadido a las dependencias
+      handleEndMessage, // Añadido a las dependencias
       setIsAvatarTalking,
     ],
   );
@@ -154,5 +157,9 @@ export const useStreamingAvatarSession = () => {
     initAvatar: init,
     startAvatar: start,
     stopAvatar: stop,
+    messages, // <<< EXPORTAMOS EL ESTADO 'messages'
+    handleUserTalkingMessage, // <<< EXPORTAMOS LA FUNCIÓN
+    handleStreamingTalkingMessage, // <<< EXPORTAMOS LA FUNCIÓN
+    handleEndMessage, // <<< EXPORTAMOS LA FUNCIÓN
   };
 };

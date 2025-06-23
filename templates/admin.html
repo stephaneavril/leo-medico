@@ -404,8 +404,11 @@
         </div>
 
         {# Video display #}
-        {% if row[5] and row[8].overall_rh_summary %}
-          <video controls src="{{ row[5] }}"></video> 
+        {% if row[6] and row[8].overall_rh_summary %}
+       <video controls>
+        <source src="{{ row[6] }}" type="video/mp4" />
+      Tu navegador no soporta la reproducción de video.
+      </video>
         {% else %}
           <p style="color: gray; text-align: center;">⏳ Esta sesión se mostrará completa cuando el análisis haya terminado.</p>
         {% endif %}
@@ -414,7 +417,7 @@
         {% if row[5] %} {# Check if raw response (avatar dialogue) exists in row[5] #}
         <div class="chat-log" style="background-color: #fcf8f2; border-left-color: #ffaa00;">
           <p><strong>🗣️ Discurso completo del Avatar:</strong></p>
-          <div class="avatar-dialogue-content" data-json-dialogue="{{ row[12] | tojson }}"
+          <div class="avatar-dialogue-content" data-json-dialogue="{{ row[12] | default([]) | tojson }}">
                style="background-color: #e9f5ff; border: 1px solid #cce5ff; padding: 14px; border-radius: 16px; font-family: 'Open Sans', sans-serif; font-size: 15px; color: #222; line-height: 1.6; white-space: pre-line; max-width: 90%; margin: 10px auto;">
             {# Content will be inserted by JavaScript #}
           </div>

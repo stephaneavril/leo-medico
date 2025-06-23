@@ -49,15 +49,7 @@ function InteractiveSessionContent() {
   const userToken = searchParams.get('token');
 
   const { initAvatar, startAvatar, stopAvatar, sessionState, stream } = useStreamingAvatarSession();
-  const { messages: messageHistory } = useMessageHistory();
   const { startVoiceChat, isVoiceChatActive } = useVoiceChat();
-
-  // messagesRef will hold the latest state of `messages` to avoid stale closures
-  const messagesRef = useRef<any[]>([]);
-  useEffect(() => {
-    messagesRef.current = messages;
-    console.log('Page: messagesRef updated with latest messages:', messages);
-  }, [messages]);
 
 
   const [config, setConfig] = useState<StartAvatarRequest>(DEFAULT_CONFIG);

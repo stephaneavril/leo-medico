@@ -1,4 +1,4 @@
-// File: stephaneavril/leo_api/LEO_API-41312fbadb4af8d7b7904b3ffb825896429b306c/components/logic/context.tsx
+// File: C:\Users\avril\OneDrive\Escritorio\LEO_API\InteractiveAvatarNextJSDemo-main\components\logic\context.tsx
 import StreamingAvatar, {
   ConnectionQuality,
   StreamingTalkingMessageEvent,
@@ -131,26 +131,26 @@ const useStreamingAvatarMessageState = () => {
   }: {
     detail: UserTalkingMessageEvent;
   }) => {
-    console.log('Context: handleUserTalkingMessage - Raw detail:', detail); // NEW DEBUG LOG
-    const messageContent = typeof detail.message === 'string' ? detail.message : ''; // Ensure string or empty
-    console.log('Context: handleUserTalkingMessage - Processed messageContent:', messageContent); // NEW DEBUG LOG
+    console.log('Context: handleUserTalkingMessage - Raw detail:', detail);
+    const messageContent = typeof detail.message === 'string' ? detail.message : '';
+    console.log('Context: handleUserTalkingMessage - Processed messageContent:', messageContent);
     
     setMessages((prev) => {
       const safePrev = Array.isArray(prev) ? prev : [];
       
       if (currentSenderRef.current === MessageSender.CLIENT && safePrev.length > 0) {
         const lastMessage = safePrev[safePrev.length - 1];
-        const lastContent = typeof lastMessage?.content === 'string' ? lastMessage.content : ''; // Safely get content as string
-        console.log('Context: Appending user message:', messageContent, 'to last:', lastContent); // DEBUG LOG
+        const lastContent = typeof lastMessage?.content === 'string' ? lastMessage.content : '';
+        console.log('Context: Appending user message:', messageContent, 'to last:', lastContent);
         return [
           ...safePrev.slice(0, -1),
           {
-            ...lastMessage, // Keep other properties of the last message
-            content: [lastContent, messageContent].join(""), // Concatenate safely
+            ...lastMessage,
+            content: [lastContent, messageContent].join(""),
           },
         ];
       } else {
-        console.log('Context: Adding new user message:', messageContent); // DEBUG LOG
+        console.log('Context: Adding new user message:', messageContent);
         currentSenderRef.current = MessageSender.CLIENT;
         return [
           ...safePrev,
@@ -169,26 +169,26 @@ const useStreamingAvatarMessageState = () => {
   }: {
     detail: StreamingTalkingMessageEvent;
   }) => {
-    console.log('Context: handleStreamingTalkingMessage - Raw detail:', detail); // NEW DEBUG LOG
-    const messageContent = typeof detail.message === 'string' ? detail.message : ''; // Ensure string or empty
-    console.log('Context: handleStreamingTalkingMessage - Processed messageContent:', messageContent); // NEW DEBUG LOG
+    console.log('Context: handleStreamingTalkingMessage - Raw detail:', detail);
+    const messageContent = typeof detail.message === 'string' ? detail.message : '';
+    console.log('Context: handleStreamingTalkingMessage - Processed messageContent:', messageContent);
 
     setMessages((prev) => {
       const safePrev = Array.isArray(prev) ? prev : [];
 
       if (currentSenderRef.current === MessageSender.AVATAR && safePrev.length > 0) {
         const lastMessage = safePrev[safePrev.length - 1];
-        const lastContent = typeof lastMessage?.content === 'string' ? lastMessage.content : ''; // Safely get content as string
-        console.log('Context: Appending avatar message:', messageContent, 'to last:', lastContent); // DEBUG LOG
+        const lastContent = typeof lastMessage?.content === 'string' ? lastMessage.content : '';
+        console.log('Context: Appending avatar message:', messageContent, 'to last:', lastContent);
         return [
           ...safePrev.slice(0, -1),
           {
-            ...lastMessage, // Keep other properties of the last message
-            content: [lastContent, messageContent].join(""), // Concatenate safely
+            ...lastMessage,
+            content: [lastContent, messageContent].join(""),
           },
         ];
       } else {
-        console.log('Context: Adding new avatar message:', messageContent); // DEBUG LOG
+        console.log('Context: Adding new avatar message:', messageContent);
         currentSenderRef.current = MessageSender.AVATAR;
         return [
           ...safePrev,

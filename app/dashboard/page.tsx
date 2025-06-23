@@ -1,4 +1,4 @@
-// File: stephaneavril/leo_api/LEO_API-b913b081323a85b5938124f7a062b68789831888/app/dashboard/page.tsx
+// File: C:\Users\avril\OneDrive\Escritorio\LEO_API\InteractiveAvatarNextJSDemo-main\app\dashboard\page.tsx
 'use client';
 
 import { useEffect, useState } from 'react';
@@ -51,9 +51,14 @@ export default function DashboardPage() {
         });
 
         if (response.ok) {
-          const data = await response.json();
-          setRecords(data.records);
-          setUsedSeconds(data.used_seconds);
+        const data = await response.json();
+       // ⬅️ 1. Siempre inicializar con array vacío si viene undefined o null
+        setRecords(Array.isArray(data.records) ? data.records : []);
+
+         // ⬅️ 2. Si el backend no manda número, forzamos 0
+        setUsedSeconds(
+          typeof data.used_seconds === 'number' ? data.used_seconds : 0
+         );
         } else {
           const errorText = await response.text();
           console.error('Error fetching dashboard data:', errorText);
@@ -62,6 +67,7 @@ export default function DashboardPage() {
         }
       } catch (error) {
         console.error('Network error fetching dashboard data:', error);
+        setRecords([]);
         alert('Error de red al cargar el dashboard. Intenta de nuevo.');
         router.push('/');
       }
