@@ -274,8 +274,7 @@ def clean_display_text(text: str) -> str:
     # Further cleaning for concatenated words without space (e.g., "diasdias" -> "dias dias")
     # This pattern looks for a word repeated immediately without a space in between, but is very aggressive.
     # It might be better to skip this if it causes false positives.
-    # For a safer approach, if 'HolaHola' is common, you might specifically replace it.
-    # For general conversational text, this is hard without an NLU model.
+    # For 'HolaHola' specifically, you might want to specifically replace it.
     # text = re.sub(r'([a-zA-ZáéíóúÁÉÍÓÚñÑ]+?)\1([a-zA-ZáéíóúÁÉÍÓÚñÑ]*)', r'\1 \1\2', text)
     
     # Fix multiple spaces
@@ -332,75 +331,120 @@ def admin_panel():
         processed_data = []
         for row in raw_data:
             try:
-                # Parse raw JSON from DB
+                # Original DB row structure (from SELECT query):
+                # (id, name, email, scenario, message, response, audio_path, timestamp, evaluation, evaluation_rh, tip, visual_feedback)
+                # Indices:
+                # 0: id
+                # 1: name
+                # 2: email
+                # 3: scenario
+                # 4: message (user_transcript)
+                # 5: response (avatar_transcript)
+                # 6: audio_path (video_s3)
+                # 7: timestamp
+                # 8: evaluation (public_summary)
+                # 9: evaluation_rh (raw JSON string)
+                # 10: tip
+                # 11: visual_feedback
+
+                # Safely parse JSON fields
                 user_dialogue_raw = json.loads(row[4]) if row[4] else []
                 avatar_dialogue_raw = json.loads(row[5]) if row[5] else []
-
-                # Ensure they are lists, even if JSON was a single string
                 if not isinstance(user_dialogue_raw, list):
+                    # If it's a single string (not a list of segments), wrap it as a single segment
                     user_dialogue_raw = [str(user_dialogue_raw)]
                 if not isinstance(avatar_dialogue_raw, list):
+                    # If it's a single string (not a list of segments), wrap it as a single segment
                     avatar_dialogue_raw = [str(avatar_dialogue_raw)]
 
-                # Clean each individual segment
-                # Apply strip() to each segment before passing to clean_display_text
-                cleaned_user_segments = [clean_display_text(s.strip()) for s in user_dialogue_raw if s.strip()]
-                cleaned_avatar_segments = [clean_display_text(s.strip()) for s in avatar_dialogue_raw if s.strip()]
+                # Clean each individual segment. Ensure string conversion before strip/clean.
+                cleaned_user_segments = [clean_display_text(str(s).strip()) for s in user_dialogue_raw if str(s).strip()]
+                cleaned_avatar_segments = [clean_display_text(str(s).strip()) for s in avatar_dialogue_raw if str(s).strip()]
 
-                # Clean name and email for display
-                cleaned_name = clean_display_text(row[0]) if row[0] else ""
-                cleaned_email = clean_display_text(row[1]) if row[1] else ""
+                # Clean name, email, and scenario for display. Use correct DB indices and ensure string conversion.
+                cleaned_name = clean_display_text(str(row[1])) if row[1] else "" # DB row[1] is name
+                cleaned_email = clean_display_text(str(row[2])) if row[2] else "" # DB row[2] is email
+                cleaned_scenario = clean_display_text(str(row[3])) if row[3] else "" # DB row[3] is scenario
 
-            except (json.JSONDecodeError, TypeError) as e:
-                print(f"Error parsing conversation JSON: {e}")
-                cleaned_user_segments = ["Error al cargar transcripción del participante (JSON inválido)."]
-                cleaned_avatar_segments = ["Error al cargar transcripción del avatar (JSON inválido)."]
-                cleaned_name = clean_display_text(row[0]) if row[0] else ""
-                cleaned_email = clean_display_text(row[1]) if row[1] else ""
+                # Parse RH evaluation
+                try:
+                    parsed_rh_evaluation = json.loads(row[9])
+                    if not parsed_rh_evaluation:
+                      parsed_rh_evaluation = {"status": "No hay análisis de RH disponible."}
+                except (json.JSONDecodeError, TypeError):
+                    parsed_rh_evaluation = {"status": "No hay análisis de RH disponible."}
+                
+                # Construct the row for the template with consistent indexing
+                # This list's indices should correspond to what admin.html now expects.
+                current_processed_row = [
+                    row[0], # 0: ID (for delete button form action)
+                    cleaned_name, # 1: Name (for h3 display)
+                    cleaned_email, # 2: Email (for h3 display)
+                    cleaned_scenario, # 3: Scenario (for scenario display)
+                    cleaned_user_segments, # 4: User dialogue (list of segments)
+                    cleaned_avatar_segments, # 5: Avatar dialogue (list of segments)
+                    row[6], # 6: Video URL (audio_path)
+                    row[7], # 7: Timestamp
+                    row[8], # 8: Public Summary (evaluation)
+                    parsed_rh_evaluation, # 9: RH evaluation (full dict for detailed analysis)
+                    row[10], # 10: Tip
+                    row[11] # 11: Visual feedback
+                ]
 
+                # Filling in default messages if certain fields are empty
+                if not current_processed_row[8]: # Public summary (index 8)
+                    current_processed_row[8] = "Análisis IA pendiente."
+                if not current_processed_row[10]: # Tip (index 10)
+                    current_processed_row[10] = "Consejo pendiente."
+                if not current_processed_row[11]: # Visual Feedback (index 11)
+                    current_processed_row[11] = "Análisis visual pendiente."
 
-            try:
-                parsed_rh_evaluation = json.loads(row[9])
-                if not parsed_rh_evaluation:
-                  parsed_rh_evaluation = {"status": "No hay análisis de RH disponible."}
-            except (json.JSONDecodeError, TypeError):
-                parsed_rh_evaluation = {"status": "No hay análisis de RH disponible."}
+                processed_data.append(current_processed_row)
 
-
-            processed_row = list(row)
-            processed_row[0] = cleaned_name # Use cleaned name for display
-            processed_row[1] = cleaned_email # Use cleaned email for display
-            processed_row[3] = cleaned_user_segments # Pass cleaned user segments to row[3]
-            processed_row[4] = cleaned_avatar_segments # Pass cleaned avatar segments to row[4]
-            # row[5] is raw_response (avatar_dialogue_parsed initially), not used for display here anymore
-            # row[9] is evaluation_rh, which is parsed_rh_evaluation
-            processed_row[9] = parsed_rh_evaluation
-
-
-            if not processed_row[8]:
-                 processed_row[8] = "Análisis IA pendiente."
-            if not processed_row[10]:
-                 processed_row[10] = "Consejo pendiente."
-            if not processed_row[11]:
-                 processed_row[11] = "Análisis visual pendiente."
-
-            processed_data.append(processed_row)
+            except Exception as e:
+                print(f"Error processing row from database: {e}. Raw row: {row}")
+                # Directly construct the placeholder list for error cases
+                processed_data.append([
+                    row[0] if len(row) > 0 else "N/A", # 0: ID (if available)
+                    "Error", # 1: Name
+                    "Error", # 2: Email
+                    "Error al cargar", # 3: Scenario
+                    ["Error al cargar transcripción del participante."], # 4: User segments
+                    ["Error al cargar transcripción del avatar."], # 5: Avatar segments
+                    None, # 6: Video URL
+                    "N/A", # 7: Timestamp
+                    f"Error de procesamiento: {str(e)}", # 8: Public Summary
+                    {"status": f"Error al cargar análisis de RH: {str(e)}"}, # 9: RH Evaluation (dict)
+                    "Error al cargar consejo.", # 10: Tip
+                    "Error al cargar feedback visual." # 11: Visual Feedback
+                ])
 
         c.execute("SELECT id, name, email, start_date, end_date, active, token FROM users")
         users = c.fetchall()
 
-        c.execute("""
-            SELECT u.name, u.email, COALESCE(SUM(i.duration_seconds), 0) AS total_seconds_used
-            FROM users u
-            LEFT JOIN interactions i ON u.email = i.email
-            GROUP BY u.name, u.email
-        """)
-        usage_rows = c.fetchall()
+        # Assuming the 'usage_summaries' query will still return correct data (from dashboard_data example).
+        # If your `get_db_connection()` doesn't return a RealDictCursor by default for all queries,
+        # ensure this part is adapted to use tuple indexing if needed.
+        # However, the provided dashboard_data function *does* use RealDictCursor, so for consistency:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur_usage:
+            cur_usage.execute("""
+                SELECT u.name, u.email, COALESCE(SUM(i.duration_seconds), 0) AS total_seconds_used
+                FROM users u
+                LEFT JOIN interactions i ON u.email = i.email
+                GROUP BY u.name, u.email
+            """)
+            usage_rows = cur_usage.fetchall()
+
 
         usage_summaries = []
         total_minutes_all_users = 0
-        for name_u, email_u, secs_dict in usage_rows: # secs_dict is a dict from RealDictCursor
-            mins = secs_dict['total_seconds_used'] // 60
+        for row_data in usage_rows:
+            # Accessing by key as RealDictCursor is used for this query
+            name_u = row_data.get('name', "Unknown")
+            email_u = row_data.get('email', "Unknown")
+            secs = row_data.get('total_seconds_used', 0)
+            
+            mins = secs // 60
             total_minutes_all_users += mins
             summary = "Buen desempeño general" if mins >= 15 else "Actividad moderada" if mins >= 5 else "Poca actividad, se sugiere seguimiento"
             usage_summaries.append({
@@ -454,19 +498,10 @@ def start_session():
         if not active:                    return "Usuario inactivo.", 403
         if not (start <= today <= end):   return "Fuera de rango.", 403
 
-        # --- decide qué token usar ----------------------------
-        token = db_token                 # ✔  mantén el que ya existe
-        # ▸  o descomenta para rotar cada login:
-        # token = uuid4().hex
-        # with conn.cursor() as cur:
-        #     cur.execute("UPDATE users SET token=%s WHERE email=%s",
-        #                 (token, email))
-        # conn.commit()
-
+        token = db_token
     finally:
         conn.close()
 
-    # ───────── cookies (¡dentro de la función!) ───────────────────
     cookie_opts = dict(
         max_age  = 60*60*24*30,   # 30 días
         path     = "/",
@@ -486,7 +521,7 @@ def start_session():
         resp.set_cookie(k, v, **cookie_opts)
 
     print(f"[DEBUG] cookie token = {token}")
-    return resp                     # 👈  ¡ahora sí se devuelve!
+    return resp
 
 @app.route("/validate_user", methods=["POST"])
 def validate_user_endpoint():
@@ -573,7 +608,6 @@ def dashboard_data():
             sessions = cur.fetchall()
 
             # Second query: Calculate total used seconds (using the SAME open cursor)
-            # IMPORTANT FIX: Handle fetchone() possibly returning None
             cur.execute(
                  """
                 SELECT COALESCE(SUM(duration_seconds), 0) AS total_seconds_used
@@ -582,7 +616,7 @@ def dashboard_data():
                 """,
                 (email,)
             )
-            result = cur.fetchone() # Fetch the result
+            result = cur.fetchone()
             total_used_seconds = result['total_seconds_used'] if result is not None else 0
 
         return jsonify({"sessions": sessions, "used_seconds": total_used_seconds}), 200

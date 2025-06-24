@@ -123,6 +123,7 @@ const useStreamingAvatarVoiceChatState = () => {
   };
 };
 
+// ADDED: Definition for useStreamingAvatarMessageState (already present, but confirming its placement)
 const useStreamingAvatarMessageState = () => {
   const [messages, setMessages] = useState<Message[]>([]);
   // This ref tracks the sender of the *current, ongoing* message.
@@ -240,6 +241,24 @@ const useStreamingAvatarMessageState = () => {
   };
 };
 
+// ADDED: Definitions for the missing state hooks
+const useStreamingAvatarListeningState = () => {
+  const [isListening, setIsListening] = useState(false);
+  return { isListening, setIsListening };
+};
+
+const useStreamingAvatarTalkingState = () => {
+  const [isUserTalking, setIsUserTalking] = useState(false);
+  const [isAvatarTalking, setIsAvatarTalking] = useState(false);
+  return { isUserTalking, setIsUserTalking, isAvatarTalking, setIsAvatarTalking };
+};
+
+const useStreamingAvatarConnectionQualityState = () => {
+  const [connectionQuality, setConnectionQuality] = useState(ConnectionQuality.UNKNOWN);
+  return { connectionQuality, setConnectionQuality };
+};
+
+
 export const StreamingAvatarProvider = ({
   children,
   basePath,
@@ -251,7 +270,7 @@ export const StreamingAvatarProvider = ({
   const voiceChatState = useStreamingAvatarVoiceChatState();
   const sessionState = useStreamingAvatarSessionState();
   const messageState = useStreamingAvatarMessageState(); 
-  const listeningState = useStreamingAvatarListeningState();
+  const listeningState = useStreamingAvatarListeningState(); 
   const talkingState = useStreamingAvatarTalkingState();
   const connectionQualityState = useStreamingAvatarConnectionQualityState();
 

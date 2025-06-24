@@ -401,57 +401,40 @@
     <h2 class="section-title">Resultados de Sesiones Individuales</h2>
     {% for row in data %}
       <div class="session-entry">
-        <h3>{{ row[0] }} <span style="font-weight: normal; color: #777;">({{ row[1] }})</span></h3>
+        <h3>{{ row[1] }} <span style="font-weight: normal; color: #777;">({{ row[2] }})</span></h3>
         <p class="session-info">
-            <strong>Escenario:</strong> {{ row[2] }}<br>
-            <strong>Fecha:</strong> {{ row[6] }}
+            <strong>Escenario:</strong> {{ row[3] }}<br>
+            <strong>Fecha:</strong> {{ row[7] }}
         </p>
 
-        {# NEW Code for granular chat log display using bullet points - this replaces the old <p> tags #}
         <div class="chat-log">
           <p><strong>Participante:</strong></p>
           <ul>
-            {% for segment in row[3] %} {# row[3] now contains the list of cleaned user segments #}
+            {% for segment in row[4] %}
               <li>{{ segment }}</li>
             {% endfor %}
           </ul>
           <p class="mt-3"><strong>Leo:</strong></p>
           <ul>
-            {% for segment in row[4] %} {# row[4] now contains the list of cleaned avatar segments #}
+            {% for segment in row[5] %}
               <li>{{ segment }}</li>
             {% endfor %}
           </ul>
         </div>
 
-        {# Video display #}
-        {% if row[6] and row[8].overall_rh_summary %}
+        {% if row[6] and row[6] != "Video_Not_Available_Error" and row[6] != "Video_Processing_Failed" and row[6] != "Video_Missing_Error" %}
        <video controls>
         <source src="{{ row[6] }}" type="video/mp4" />
       Tu navegador no soporta la reproducción de video.
       </video>
         {% else %}
-          <p style="color: gray; text-align: center;">⏳ Esta sesión se mostrará completa cuando el análisis haya terminado.</p>
-        {% endif %}
-
-        {# The following section for "Discurso completo del Avatar (Raw)" needs to be carefully reviewed based on your data structure. #}
-        {# If row[12] is designed to hold a raw, JSON-stringified array of avatar dialogue segments for a secondary display, then this is fine. #}
-        {# However, if row[12] is not populated or contains other data, this block might be redundant or display incorrect information. #}
-        {# For the immediate goal of interleaved display, this section is not directly involved, but it was part of your previous template. #}
-        {% if row[12] %}
-        <div class="chat-log" style="background-color: #fcf8f2; border-left-color: #ffaa00;">
-          <p><strong>🗣️ Discurso completo del Avatar (Raw):</strong></p>
-          <div class="avatar-dialogue-content" data-json-dialogue="{{ row[12] | default([]) | tojson }}">
-               <div style="background-color: #e9f5ff; border: 1px solid #cce5ff; padding: 14px; border-radius: 16px; font-family: 'Open Sans', sans-serif; font-size: 15px; color: #222; line-height: 1.6; white-space: pre-line; max-width: 90%; margin: 10px auto;">
-                {# Content will be inserted by JavaScript #}
-              </div>
-          </div>
-        </div>
+          <p style="color: gray; text-align: center;">⏳ Esta sesión se mostrará completa cuando el análisis haya terminado o el video no está disponible.</p>
         {% endif %}
 
 
         <div class="evaluation">
           <strong>Resumen para usuario:</strong><br>
-          {{ row[7] }}
+          {{ row[8] }}
         </div>
 
         <div class="evaluation rh">
@@ -463,22 +446,22 @@
             <div style="border: 1px solid var(--border-color); padding: 10px; border-radius: 5px;">
                 <div class="metric-line">
                     <span class="metric-label">Diagnóstico:</span>
-                    <span class="metric-value">{{ row[9].sales_model_simple_detection.diagnostico }}</span>
+                    <span class="metric-value">{{ row[9].gpt_detailed_feedback.Diagnostico if row[9].gpt_detailed_feedback and row[9].gpt_detailed_feedback.Diagnostico is defined else 'N/A' }}</span>
                 </div>
                 <div class="metric-line">
                     <span class="metric-label">Argumentación:</span>
-                    <span class="metric-value">{{ row[9].sales_model_simple_detection.argumentacion }}</span>
+                    <span class="metric-value">{{ row[9].gpt_detailed_feedback.Argumentacion if row[9].gpt_detailed_feedback and row[9].gpt_detailed_feedback.Argumentacion is defined else 'N/A'}}</span>
                 </div>
                 <div class="metric-line">
                     <span class="metric-label">Validación:</span>
-                    <span class="metric-value">{{ row[9].sales_model_simple_detection.validacion }}</span>
+                    <span class="metric-value">{{ row[9].gpt_detailed_feedback.Validacion if row[9].gpt_detailed_feedback and row[9].gpt_detailed_feedback.Validacion is defined else 'N/A'}}</span>
                 </div>
                 <div class="metric-line">
                     <span class="metric-label">Cierre:</span>
-                    <span class="metric-value">{{ row[9].sales_model_simple_detection.cierre }}</span>
+                    <span class="metric-value">{{ row[9].gpt_detailed_feedback.Cierre if row[9].gpt_detailed_feedback and row[9].gpt_detailed_feedback.Cierre is defined else 'N/A'}}</span>
                 </div>
                 <p style="text-align: right; margin-top: 5px; font-size: 0.85em; color: #666;">
-                    (Pasos detectados por análisis simple: {{ row[9].sales_model_simple_detection.steps_applied_count }})
+                    (Pasos detectados por análisis simple: {{ row[9].sales_model_simple_detection.steps_applied_count if row[9].sales_model_simple_detection and row[9].sales_model_simple_detection.steps_applied_count is defined else 'N/A' }})
                 </p>
             </div>
 
@@ -486,15 +469,15 @@
             <div style="border: 1px solid var(--border-color); padding: 10px; border-radius: 5px;">
                 <div class="metric-line">
                     <span class="metric-label">Palabras clave científicas:</span>
-                    <span class="metric-value">{{ row[9].knowledge_score }}</span>
+                    <span class="metric-value">{{ row[9].knowledge_score if row[9].knowledge_score else 'N/A' }}</span>
                 </div>
                 <div class="metric-line">
                     <span class="metric-label">Escucha Activa (Simple):</span>
-                    <span class="metric-value">{{ row[9].active_listening_simple_detection }}</span>
+                    <span class="metric-value">{{ row[9].active_listening_simple_detection if row[9].active_listening_simple_detection else 'N/A' }}</span>
                 </div>
                 <div class="metric-line">
                     <span class="metric-label">Presencia en Video:</span>
-                    <span class="metric-value">{{ row[9].visual_presence }} ({{ row[9].visual_percentage }})</span>
+                    <span class="metric-value">{{ row[9].visual_presence if row[9].visual_presence else 'N/A' }} ({{ row[9].visual_percentage if row[9].visual_percentage else 'N/A' }})</span>
                 </div>
             </div>
 
@@ -505,53 +488,51 @@
                   <p><strong>Evaluación General de la IA:</strong> {{ row[9].gpt_detailed_feedback.overall_evaluation }}</p>
                 {% endif %}
 
-                {% if row[9].gpt_detailed_feedback.da_vinci_model_feedback %}
-                  <p><strong>Análisis de Fases del Modelo Da Vinci:</strong></p>
-                  <ul>
-                    {% for phase, details in row[9].gpt_detailed_feedback.da_vinci_model_feedback.items() %}
-                      <li><strong>{{ phase | capitalize }}:</strong> <span style="font-weight: bold; color: var(--primary-dark);">{{ details.score }}</span> - {{ details.feedback }}</li>
-                    {% endfor %}
-                  </ul>
-                {% endif %}
+                {# Corrected fields for Da Vinci Model feedback #}
+                {% if row[9].gpt_detailed_feedback.Diagnostico is defined %}
+                  <p><strong>Diagnóstico:</strong> {{ row[9].gpt_detailed_feedback.Diagnostico }}</p>
+                {% endif %}
+                {% if row[9].gpt_detailed_feedback.Argumentacion is defined %}
+                  <p><strong>Argumentación:</strong> {{ row[9].gpt_detailed_feedback.Argumentacion }}</p>
+                {% endif %}
+                {% if row[9].gpt_detailed_feedback.Validacion is defined %}
+                  <p><strong>Validación:</strong> {{ row[9].gpt_detailed_feedback.Validacion }}</p>
+                {% endif %}
+                {% if row[9].gpt_detailed_feedback.Cierre is defined %}
+                  <p><strong>Cierre:</strong> {{ row[9].gpt_detailed_feedback.Cierre }}</p>
+                {% endif %}
 
-                {% if row[9].gpt_detailed_feedback.insights_discovery_adaptation %}
-                  <p><strong>Adaptación al Estilo del Médico (Insights Discovery):</strong></p>
-                  <ul>
-                    <li>Tipo inferido de Leo: <span style="font-weight: bold; color: var(--primary-dark);">{{ row[9].gpt_detailed_feedback.insights_discovery_adaptation.inferred_leo_type }}</span></li>
-                    <li>Nivel de adaptación: <span style="font-weight: bold; color: var(--primary-dark);">{{ row[9].gpt_detailed_feedback.insights_discovery_adaptation.adaptation_score }}</span></li>
-                    <li>Comentarios: {{ row[9].gpt_detailed_feedback.insights_discovery_adaptation.feedback }}</li>
-                  </ul>
-                {% endif %}
 
-                {% if row[9].gpt_detailed_feedback.objection_handling_feedback and row[9].gpt_detailed_feedback.objection_handling_feedback.objection_detected %}
-                  <p><strong>Manejo de Objeciones:</strong></p>
-                  <ul>
-                    <li>Objeción detectada: <span style="font-weight: bold; color: var(--primary-dark);">Sí</span></li>
-                    <li>Tipo de objeción (MILD): <span style="font-weight: bold; color: var(--primary-dark);">{{ row[9].gpt_detailed_feedback.objection_handling_feedback.type }}</span></li>
-                    <li>APACT aplicado: <span style="font-weight: bold; color: var(--primary-dark);">{{ row[9].gpt_detailed_feedback.objection_handling_feedback.apact_applied }}</span></li>
-                    <li>Comentarios: {{ row[9].gpt_detailed_feedback.objection_handling_feedback.feedback }}</li>
-                  </ul>
-                {% elif row[9].gpt_detailed_feedback.objection_handling_feedback and not row[9].gpt_detailed_feedback.objection_handling_feedback.objection_detected %}
-                  <p><strong>Manejo de Objeciones:</strong> No se detectaron objeciones del médico en esta sesión.</p>
-                {% endif %}
+                {# Corrected fields for other detailed feedback sections #}
+                {% if row[9].gpt_detailed_feedback.Prioridad_en_uso_del_tiempo is defined %}
+                  <p><strong>Prioridad en uso del tiempo:</strong> {{ row[9].gpt_detailed_feedback.Prioridad_en_uso_del_tiempo }}</p>
+                {% endif %}
+                {% if row[9].gpt_detailed_feedback.Adaptacion_al_estilo_del_medico is defined %}
+                  <p><strong>Adaptación al estilo del médico:</strong>
+                    {% if row[9].gpt_detailed_feedback.Adaptacion_al_estilo_del_medico.comentarios is defined %}
+                        {{ row[9].gpt_detailed_feedback.Adaptacion_al_estilo_del_medico.comentarios }}
+                    {% else %}
+                        N/A
+                    {% endif %}
+                  </p>
+                {% endif %}
+                {% if row[9].gpt_detailed_feedback.Control_de_la_conversacion is defined %}
+                  <p><strong>Control de la conversación:</strong> {{ row[9].gpt_detailed_feedback.Control_de_la_conversacion }}</p>
+                {% endif %}
+                {% if row[9].gpt_detailed_feedback.Manejo_de_preguntas_criticas_del_medico is defined %}
+                  <p><strong>Manejo de preguntas críticas del médico:</strong> {{ row[9].gpt_detailed_feedback.Manejo_de_preguntas_criticas_del_medico }}</p>
+                {% endif %}
+                {% if row[9].gpt_detailed_feedback.Manejo_de_objeciones is defined %}
+                  <p><strong>Manejo de objeciones:</strong> {{ row[9].gpt_detailed_feedback.Manejo_de_objeciones }}</p>
+                {% endif %}
+                {% if row[9].gpt_detailed_feedback.Escucha_activa is defined %}
+                  <p><strong>Escucha activa:</strong> {{ row[9].gpt_detailed_feedback.Escucha_activa }}</p>
+                {% endif %}
 
-                {% if row[9].gpt_detailed_feedback.active_listening_feedback %}
-                  <p><strong>Escucha Activa Detallada:</strong> <span style="font-weight: bold; color: var(--primary-dark);">{{ row[9].gpt_detailed_feedback.active_listening_feedback.score }}</span> - {{ row[9].gpt_detailed_feedback.active_listening_feedback.feedback }}</p>
-                {% endif %}
-
-                {% if row[9].gpt_detailed_feedback.strengths %}
-                  <p><strong>Puntos Fuertes Identificados por la IA:</strong></p>
-                  <ul>
-                    {% for strength in row[9].gpt_detailed_feedback.strengths %}
-                      <li>{{ strength }}</li>
-                    {% endfor %}
-                  </ul>
-                {% endif %}
-
-                {% if row[9].gpt_detailed_feedback.areas_for_improvement_specific %}
+                {% if row[9].gpt_detailed_feedback.Areas_de_mejora %}
                   <p><strong>Áreas de Mejora Específicas (Sugerencias de la IA para Coaching):</strong></p>
                   <ul>
-                    {% for area in row[9].gpt_detailed_feedback.areas_for_improvement_specific %}
+                    {% for area in row[9].gpt_detailed_feedback.Areas_de_mejora %}
                       <li>{{ area }}</li>
                     {% endfor %}
                   </ul>
@@ -562,7 +543,7 @@
               <p>No hay feedback detallado de la IA disponible para esta sesión.</p>
             {% endif %}
 
-          {% endif %} {# End if row[9].error #}
+          {% endif %}
           <div style="margin-top: 20px; text-align: right;">
         <form action="/admin/delete_session/{{ row[0] }}" method="POST" onsubmit="return confirm('¿Estás seguro de que quieres eliminar esta sesión y su video?');">
           <button type="submit" style="background-color: #dc3545; color: white; padding: 8px 15px; border-radius: 5px; border: none; cursor: pointer;">
@@ -614,4 +595,32 @@
 
       <table>
         <tr>
-          <th>Nombre</th><th>Email</th><th>Token</th><th>Rango de Fechas</th><th>
+          <th>Nombre</th><th>Email</th><th>Token</th><th>Rango de Fechas</th><th>Activo</th><th>Acciones</th>
+        </tr>
+        {% for user in users %}
+        <tr>
+          <td>{{ user[1] }}</td>
+          <td>{{ user[2] }}</td>
+          <td>{{ user[6] }}</td>
+          <td>{{ user[3] }} - {{ user[4] }}</td>
+          <td>{{ "Sí" if user[5] else "No" }}</td>
+          <td>
+            <form class="user-management-actions" action="/admin" method="POST">
+              <input type="hidden" name="user_id" value="{{ user[0] }}">
+              <button type="submit" name="action" value="toggle">
+                {{ "Desactivar" if user[5] else "Activar" }}
+              </button>
+              <button type="submit" name="action" value="regen_token">
+                Nuevo Token
+              </button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </table>
+    </div>
+  <footer>
+    <p>Desarrollado por <a href="https://www.teams.com.mx" target="_blank">Teams</a> &copy; 2025</p>
+  </footer>
+</body>
+</html>
