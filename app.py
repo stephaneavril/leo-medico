@@ -13,6 +13,7 @@ from typing import Union
 import openai
 import boto3
 from botocore.exceptions import ClientError
+import re
 
 print("\U0001F680 Iniciando Leo Virtual Trainer (Modo Simple)...")
 
@@ -233,6 +234,55 @@ def logout():
     session.clear()
     return redirect("/login")
 
+# Inside app.py, add this helper function
+def clean_display_text(text: str) -> str:
+    if not isinstance(text, str):
+        return ""
+
+    # Normalize common spaces/newlines before splitting
+    text = text.replace('\r\n', ' ').replace('\n', ' ').strip()
+    
+    # Replace common escaped UTF-8 sequences if they appear literally
+    # This is a heuristic for specific mis-encodings like "\303\251" becoming literal text
+    text = text.replace('\\303\\251', 'é') # Common for 'é'
+    text = text.replace('\\303\\241', 'á') # For 'á'
+    text = text.replace('\\303\\255', 'í') # For 'í'
+    text = text.replace('\\303\\263', 'ó') # For 'ó'
+    text = text.replace('\\303\\272', 'ú') # For 'ú'
+    text = text.replace('\\303\\261', 'ñ') # For 'ñ'
+    text = text.replace('\\302\\277', '¿') # For '¿'
+    text = text.replace('\\302\\241', '¡') # For '¡'
+
+    # Attempt to remove repeated words/phrases (heuristic)
+    words = text.split(' ')
+    cleaned_words_list = []
+    last_word = None
+    for word in words:
+        if word != last_word: # Simple check for direct word repetition
+            cleaned_words_list.append(word)
+        last_word = word
+    text = ' '.join(cleaned_words_list)
+    
+    # Remove consecutive repeated characters (e.g., "Buenoos" -> "Buenos")
+    # This regex replaces 'aa', 'bb', etc. with 'a', 'b' only if they appear 3 or more times
+    text = re.sub(r'(.)\1{2,}', r'\1\1', text) # Keep at least two, e.g., "hellooo" -> "helloo"
+
+    # Fix consecutive repeated words like "hola hola" -> "hola"
+    # This regex is more robust for actual word repetitions
+    text = re.sub(r'\b(\w+)\s+\1\b', r'\1', text, flags=re.IGNORECASE)
+    
+    # Further cleaning for concatenated words without space (e.g., "diasdias" -> "dias dias")
+    # This pattern looks for a word repeated immediately without a space in between, but is very aggressive.
+    # It might be better to skip this if it causes false positives.
+    # For a safer approach, if 'HolaHola' is common, you might specifically replace it.
+    # For general conversational text, this is hard without an NLU model.
+    # text = re.sub(r'([a-zA-ZáéíóúÁÉÍÓÚñÑ]+?)\1([a-zA-ZáéíóúÁÉÍÓÚñÑ]*)', r'\1 \1\2', text)
+    
+    # Fix multiple spaces
+    text = re.sub(r'\s+', ' ', text).strip()
+    
+    return text
+
 @app.route("/admin", methods=["GET", "POST"])
 def admin_panel():
     if not session.get("admin"):
@@ -282,18 +332,32 @@ def admin_panel():
         processed_data = []
         for row in raw_data:
             try:
-                user_dialogue_parsed = json.loads(row[4]) if row[4] else []
-                avatar_dialogue_parsed = json.loads(row[5]) if row[5] else []
+                # Parse raw JSON from DB
+                user_dialogue_raw = json.loads(row[4]) if row[4] else []
+                avatar_dialogue_raw = json.loads(row[5]) if row[5] else []
 
-                full_user_text = "\n".join(user_dialogue_parsed) if isinstance(user_dialogue_parsed, list) else str(user_dialogue_parsed)
-                full_avatar_text = "\n".join(avatar_dialogue_parsed) if isinstance(avatar_dialogue_parsed, list) else str(avatar_dialogue_parsed)
+                # Ensure they are lists, even if JSON was a single string
+                if not isinstance(user_dialogue_raw, list):
+                    user_dialogue_raw = [str(user_dialogue_raw)]
+                if not isinstance(avatar_dialogue_raw, list):
+                    avatar_dialogue_raw = [str(avatar_dialogue_raw)]
 
-                full_conversation_display = f"Participante: {full_user_text}\nLeo: {full_avatar_text}"
+                # Clean each individual segment
+                cleaned_user_segments = [clean_display_text(s) for s in user_dialogue_raw if s.strip()]
+                cleaned_avatar_segments = [clean_display_text(s) for s in avatar_dialogue_raw if s.strip()]
 
-            except (json.JSONDecodeError, TypeError):
-                full_conversation_display = "Error al parsear conversación (JSON inválido)."
-                full_user_text = "Error al cargar transcripción del participante."
-                full_avatar_text = "Error al cargar transcripción del avatar."
+                # Clean name and email for display
+                cleaned_name = clean_display_text(row[0]) if row[0] else ""
+                cleaned_email = clean_display_text(row[1]) if row[1] else ""
+
+            except (json.JSONDecodeError, TypeError) as e:
+                print(f"Error parsing conversation JSON: {e}")
+                # Provide default cleaned segments in case of error
+                cleaned_user_segments = ["Error al cargar transcripción del participante (JSON inválido)."]
+                cleaned_avatar_segments = ["Error al cargar transcripción del avatar (JSON inválido)."]
+                cleaned_name = clean_display_text(row[0]) if row[0] else ""
+                cleaned_email = clean_display_text(row[1]) if row[1] else ""
+
 
             try:
                 parsed_rh_evaluation = json.loads(row[9])
@@ -302,9 +366,16 @@ def admin_panel():
             except (json.JSONDecodeError, TypeError):
                 parsed_rh_evaluation = {"status": "No hay análisis de RH disponible."}
 
+
             processed_row = list(row)
-            processed_row[4] = full_conversation_display
-            processed_row[5] = full_avatar_text
+            processed_row[0] = cleaned_name # Use cleaned name for display
+            processed_row[1] = cleaned_email # Use cleaned email for display
+            processed_row[3] = cleaned_user_segments # Pass cleaned user segments to row[3]
+            processed_row[4] = cleaned_avatar_segments # Pass cleaned avatar segments to row[4]
+            # row[5] originally 'response', we can assign parsed_rh_evaluation to row[9] directly
+            # Ensure row[9] is indeed evaluation_rh from DB query
+            processed_row[9] = parsed_rh_evaluation
+
 
             if not processed_row[8]:
                  processed_row[8] = "Análisis IA pendiente."
@@ -319,7 +390,7 @@ def admin_panel():
         users = c.fetchall()
 
         c.execute("""
-            SELECT u.name, u.email, COALESCE(SUM(i.duration_seconds), 0) as used_secs
+            SELECT u.name, u.email, COALESCE(SUM(i.duration_seconds), 0) AS total_seconds_used
             FROM users u
             LEFT JOIN interactions i ON u.email = i.email
             GROUP BY u.name, u.email
@@ -328,8 +399,8 @@ def admin_panel():
 
         usage_summaries = []
         total_minutes_all_users = 0
-        for name_u, email_u, secs in usage_rows:
-            mins = secs // 60
+        for name_u, email_u, secs_dict in usage_rows: # secs_dict is a dict from RealDictCursor
+            mins = secs_dict['total_seconds_used'] // 60
             total_minutes_all_users += mins
             summary = "Buen desempeño general" if mins >= 15 else "Actividad moderada" if mins >= 5 else "Poca actividad, se sugiere seguimiento"
             usage_summaries.append({
@@ -504,15 +575,15 @@ def dashboard_data():
             # Second query: Calculate total used seconds (using the SAME open cursor)
             # IMPORTANT FIX: Handle fetchone() possibly returning None
             cur.execute(
-                """
-                SELECT COALESCE(SUM(duration_seconds), 0)
+                 """
+                SELECT COALESCE(SUM(duration_seconds), 0) AS total_seconds_used
                 FROM interactions
                 WHERE email = %s;
                 """,
                 (email,)
             )
             result = cur.fetchone() # Fetch the result
-            total_used_seconds = result[0] if result is not None else 0 # Safely access element 0
+            total_used_seconds = result['total_seconds_used'] if result is not None else 0
 
         return jsonify({"sessions": sessions, "used_seconds": total_used_seconds}), 200
 
