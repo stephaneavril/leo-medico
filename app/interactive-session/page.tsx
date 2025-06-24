@@ -108,35 +108,41 @@ function InteractiveSessionContent() {
     setMounted(true);
   }, []);
 
-  /********************** HELPERS GRABACIÓN USUARIO **********************/
-  const stopUserCameraRecording = useCallback(() => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      mediaRecorderRef.current.stop();
-    }
-    if (localUserStreamRef.current) {
-      localUserStreamRef.current.getTracks().forEach((t) => t.stop());
-      localUserStreamRef.current = null;
-    }
-    if (userCameraRef.current) userCameraRef.current.srcObject = null;
-  }, []);
+ const startUserCameraRecording = useCallback(() => {
+  if (!localUserStreamRef.current || mediaRecorderRef.current) return;
+  try {
+    const recorder = new MediaRecorder(localUserStreamRef.current, {
+      mimeType: 'video/webm; codecs=vp8',
+      // You can try adding videoBitsPerSecond and audioBitsPerSecond here
+      // For example:
+      // videoBitsPerSecond: 2500000, // 2.5 Mbps
+      // audioBitsPerSecond: 128000   // 128 kbps
+    });
 
-  const startUserCameraRecording = useCallback(() => {
-    if (!localUserStreamRef.current || mediaRecorderRef.current) return;
-    try {
-      const recorder = new MediaRecorder(localUserStreamRef.current, {
-        mimeType: 'video/webm; codecs=vp8',
-      });
-      recordedChunks.current = [];
-      recorder.ondataavailable = (e) => {
-        if (e.data.size) recordedChunks.current.push(e.data);
-      };
-      recorder.start();
-      mediaRecorderRef.current = recorder;
-      console.log('🎥 MediaRecorder START');
-    } catch (err) {
-      console.error('MediaRecorder error', err);
-    }
-  }, []);
+    recordedChunks.current = [];
+
+    recorder.ondataavailable = (e) => {
+      console.log(`🎥 MediaRecorder: Received chunk. Size: ${e.data.size} bytes`); // <--- ADD/UPDATE THIS LINE
+      if (e.data.size > 0) {
+        recordedChunks.current.push(e.data);
+        console.log(`🎥 MediaRecorder: Pushed chunk. Total chunks: ${recordedChunks.current.length}`); // <--- ADD THIS LINE
+      } else {
+        console.log(`🎥 MediaRecorder: 0-size chunk received. Not pushing.`); // <--- ADD THIS LINE
+      }
+    };
+
+    recorder.onerror = (event) => { // <--- ADD THIS ERROR HANDLER
+        console.error("🎥 MediaRecorder ERROR:", event.error); // Log any specific error details
+    };
+
+    recorder.start();
+    mediaRecorderRef.current = recorder;
+    console.log('🎥 MediaRecorder START');
+    console.log(`🎥 MediaRecorder state after start: ${recorder.state}`); // <--- ADD THIS LINE to see state
+  } catch (err) {
+    console.error('MediaRecorder initialization error:', err); // Clarify initialization error
+  }
+}, []);
 
   /************************ FINALIZACIÓN DE SESIÓN ************************/
   const stopAndFinalizeSession = useMemoizedFn(async () => {

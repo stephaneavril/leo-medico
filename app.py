@@ -343,8 +343,9 @@ def admin_panel():
                     avatar_dialogue_raw = [str(avatar_dialogue_raw)]
 
                 # Clean each individual segment
-                cleaned_user_segments = [clean_display_text(s) for s in user_dialogue_raw if s.strip()]
-                cleaned_avatar_segments = [clean_display_text(s) for s in avatar_dialogue_raw if s.strip()]
+                # Apply strip() to each segment before passing to clean_display_text
+                cleaned_user_segments = [clean_display_text(s.strip()) for s in user_dialogue_raw if s.strip()]
+                cleaned_avatar_segments = [clean_display_text(s.strip()) for s in avatar_dialogue_raw if s.strip()]
 
                 # Clean name and email for display
                 cleaned_name = clean_display_text(row[0]) if row[0] else ""
@@ -352,7 +353,6 @@ def admin_panel():
 
             except (json.JSONDecodeError, TypeError) as e:
                 print(f"Error parsing conversation JSON: {e}")
-                # Provide default cleaned segments in case of error
                 cleaned_user_segments = ["Error al cargar transcripción del participante (JSON inválido)."]
                 cleaned_avatar_segments = ["Error al cargar transcripción del avatar (JSON inválido)."]
                 cleaned_name = clean_display_text(row[0]) if row[0] else ""
@@ -372,8 +372,8 @@ def admin_panel():
             processed_row[1] = cleaned_email # Use cleaned email for display
             processed_row[3] = cleaned_user_segments # Pass cleaned user segments to row[3]
             processed_row[4] = cleaned_avatar_segments # Pass cleaned avatar segments to row[4]
-            # row[5] originally 'response', we can assign parsed_rh_evaluation to row[9] directly
-            # Ensure row[9] is indeed evaluation_rh from DB query
+            # row[5] is raw_response (avatar_dialogue_parsed initially), not used for display here anymore
+            # row[9] is evaluation_rh, which is parsed_rh_evaluation
             processed_row[9] = parsed_rh_evaluation
 
 
