@@ -15,9 +15,10 @@ import { Field } from "./Field";
 
 import { AVATARS, STT_LANGUAGE_LIST } from "@/app/lib/constants";
 
-interface AvatarConfigProps {
-  onConfigChange: (config: StartAvatarRequest) => void;
+export interface AvatarConfigProps {
   config: StartAvatarRequest;
+  onConfigChange: (cfg: StartAvatarRequest) => void;
+  readOnly?: boolean;   // ← nueva prop
 }
 
 export const AvatarConfig: React.FC<AvatarConfigProps> = ({

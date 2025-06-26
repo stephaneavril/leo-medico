@@ -206,7 +206,7 @@ function InteractiveSessionContent() {
         }
       } else {
         console.warn("No video blob to upload, skipping /upload_video call.");
-        await updateSimulatedProgress("Saltando subida de video (sin video)...", 30);
+        //await updateSimulatedProgress("Saltando subida de video (sin video)...", 30);
       }
 
       console.log("Attempting to send session log to Flask /log_full_session...");
