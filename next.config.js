@@ -1,8 +1,10 @@
 // next.config.js
 /** @type {import('next').NextConfig} */
-const nextConfig = {
-  output: 'standalone',
-  assetPrefix: '/frontend/', // Change this if your app is in a subdirectory on Render
-};
+const isProd = process.env.NODE_ENV === 'production';
 
-module.exports = nextConfig;
+module.exports = {
+  output: 'standalone',
+  basePath: isProd ? '/frontend' : '',
+  assetPrefix: isProd ? '/frontend/' : '',
+  // …otras opciones que tengas
+};
