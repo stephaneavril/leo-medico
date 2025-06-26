@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "node ./.next/standalone/server.js", // <--- CHANGE THIS LINE
+    "start": "node ./.next/standalone/server.js",
     "lint": "eslint . --ext .ts,.tsx,.js,.jsx"
   },
   "dependencies": {
