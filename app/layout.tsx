@@ -1,18 +1,7 @@
-// File: stephaneavril/leo_api/LEO_API-b913b081323a85b5938124f7a062b68789831888/app/layout.tsx
+// File: stephaneavril/leo_api/LEO_API-7337efa878c219546557704899d19e82342974a0/app/layout.tsx
 import "@/styles/globals.css";
 import { Metadata } from "next";
-// Importaciones de fuentes comentadas para solucionar error de NextFontError en Render.com
-// import { Fira_Code as FontMono, Inter as FontSans } from "next/font/google";
-
-// const fontSans = FontSans({
-//   subsets: ["latin"],
-//   variable: "--font-sans",
-// });
-
-// const fontMono = FontMono({
-//   subsets: ["latin"],
-//   variable: "--font-geist-mono",
-// });
+import { Suspense } from 'react'; // Import Suspense
 
 export const metadata: Metadata = {
   title: {
@@ -41,7 +30,10 @@ export default function RootLayout({
       <body className="min-h-screen bg-black text-white">
         <main className="relative flex flex-col gap-6 h-screen w-screen">
           {/* <NavBar /> ESTA LÍNEA FUE REMOVIDA PARA ESCONDER LA BARRA DE NAVEGACIÓN */}
-          {children}
+          {/* Wrap children with Suspense to handle client components that use browser APIs during prerendering */}
+          <Suspense fallback={<div>Cargando contenido...</div>}>
+            {children}
+          </Suspense>
         </main>
       </body>
     </html>
