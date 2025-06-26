@@ -98,7 +98,15 @@ app = Flask(
     template_folder=os.path.join(BASE_DIR, 'templates'),
     static_folder=os.path.join(BASE_DIR, 'static')
 )
-CORS(app)
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
+
+CORS(
+    app,
+    origins=[
+        "https://leo-api.onrender.com",  # dominio del frontend
+    ],
+    supports_credentials=True           # si usas cookies de sesión
+)
 
 @app.before_request
 def log_request_info():
@@ -551,8 +559,9 @@ def start_session():
         secure   = False          # pon True cuando tengas HTTPS
     )
 
-    redirect_url = "http://localhost:3000/dashboard"
+    redirect_url = f"{FRONTEND_URL}/dashboard"
     resp = make_response(redirect(redirect_url, code=302))
+
 
     for k, v in {
         "user_name":     name,
