@@ -76,7 +76,7 @@ function InteractiveSessionContent() {
   const [showAutoplayBlockedMessage, setShowAutoplayBlockedMessage] = useState(false);
   const [isAttemptingAutoStart, setIsAttemptingAutoStart] = useState(false);
   const [recordingTimer, setRecordingTimer] = useState(480); // 8‑min límite
-  const [showDocPanel, setShowDocPanel] = useState(false);
+  // const [showDocPanel, setShowDocPanel] = useState(false); // Removed: No longer needed
   const [hasUserMediaPermission, setHasUserMediaPermission] = useState(false);
 
   // NEW: State to track if component has mounted (client-side) for hydration
@@ -151,7 +151,7 @@ function InteractiveSessionContent() {
   }
 }, []);
 
-  /************************ FINALIZACIÓN DE SESIÓN ************************/
+  // ************************ FINALIZACIÓN DE SESIÓN ************************
   const stopAndFinalizeSession = async (sessionMessages: any[]) => {
     if (isFinalizingRef.current) {
       console.log("🛑 Finalización ya en progreso o ya completada. Abortando llamada redundante.");
@@ -163,41 +163,53 @@ function InteractiveSessionContent() {
 
     stopAvatar(); // Stop HeyGen avatar streaming
 
+    const flaskApiUrl = process.env.NEXT_PUBLIC_FLASK_API_URL; // Declare flaskApiUrl once here
+    const trimmedFlaskApiUrl = flaskApiUrl ? flaskApiUrl.trim() : ''; // Add this line to trim
+    console.log("DEBUG: Original flaskApiUrl:", flaskApiUrl); // Keep this for raw value
+    console.log("DEBUG: Trimmed flaskApiUrl:", trimmedFlaskApiUrl); // Debugging: Check the trimmed URL
+
+
     // --- Video Recording Finalization ---
     let finalVideoBlob: Blob | null = null;
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      // Ensure onstop event listener is set up before calling stop
-      const recorderStopPromise = new Promise<void>((resolve) => {
-        mediaRecorderRef.current!.onstop = () => {
-          console.log("🎥 MediaRecorder: onstop event fired. All chunks collected.");
-          resolve();
-        };
-      });
+    if (mediaRecorderRef.current) { // Check if recorder instance exists
+        console.log(`🎥 MediaRecorder exists with state: '${mediaRecorderRef.current.state}'`);
+        if (mediaRecorderRef.current.state === 'recording' || mediaRecorderRef.current.state === 'paused') {
+            const recorderStopPromise = new Promise<void>((resolve) => {
+                mediaRecorderRef.current!.onstop = () => {
+                    console.log("🎥 MediaRecorder: onstop event fired. All chunks collected.");
+                    resolve();
+                };
+            });
 
-      // Stop the recorder instance
-      mediaRecorderRef.current.stop();
-      console.log("🎥 MediaRecorder: Sending stop signal.");
+            mediaRecorderRef.current.stop();
+            console.log("🎥 MediaRecorder: Sent stop signal.");
+            // Await the onstop event only if it was recording.
+            // For paused state, onstop might not fire immediately, but data will be available.
+            if (mediaRecorderRef.current.state === 'recording') {
+                await recorderStopPromise;
+            } else {
+                // For paused, wait a small moment to ensure last data is processed
+                await new Promise(r => setTimeout(r, 100));
+            }
 
-      // Wait for the recorder to actually stop and emit all data.
-      // This is crucial to ensure recordedChunks.current has all data.
-      await recorderStopPromise;
+        } else {
+            console.warn(`MediaRecorder state was '${mediaRecorderRef.current.state}'. No active recording to stop.`);
+        }
 
-      // After the recorder has stopped and emitted all data:
-      if (recordedChunks.current.length > 0) {
-          finalVideoBlob = new Blob(recordedChunks.current, { type: "video/webm" });
-          console.log(`✅ Video Blob created. Size: ${finalVideoBlob.size} bytes`);
-      } else {
-          console.warn("No recorded video chunks available AFTER RECORDER STOP. Video Blob will be null.");
-      }
-      
-      // Clear chunks and recorder ref AFTER processing
-      recordedChunks.current = [];
-      mediaRecorderRef.current = null;
+        if (recordedChunks.current.length > 0) {
+            finalVideoBlob = new Blob(recordedChunks.current, { type: "video/webm" });
+            console.log(`✅ Video Blob created. Size: ${finalVideoBlob.size} bytes`);
+        } else {
+            console.warn("No recorded video chunks available. Video Blob will be null.");
+        }
+
+        recordedChunks.current = []; // Clear chunks array
+        mediaRecorderRef.current = null; // Clear recorder ref
     } else {
-      console.warn("MediaRecorder was not active or initialized when stopAndFinalizeSession called. No video captured.");
+        console.warn("MediaRecorder instance was null when stopAndFinalizeSession called. No video captured.");
     }
-    
-    // Always stop user camera stream tracks, regardless of recorder state
+
+    // Always stop user camera stream tracks, regardless of recorder state or if recording was active
     stopUserCameraRecording(); // Call this function to handle tracks and camera ref cleanup
 
     // --- End Video Recording Finalization ---
@@ -215,8 +227,6 @@ function InteractiveSessionContent() {
 
     console.log(`📊 Transcripción del Usuario (longitud: ${userTranscript.length}): '${userTranscript.substring(0, Math.min(userTranscript.length, 100))}'`);
     console.log(`📊 Transcripción del Avatar (longitud: ${avatarTranscript.length}): '${avatarTranscript.substring(0, Math.min(avatarTranscript.length, 100))}'`);
-
-    const flaskApiUrl = process.env.NEXT_PUBLIC_FLASK_API_URL;
 
     const simpleProcessingDiv = document.createElement("div");
     simpleProcessingDiv.id = "simple-processing-overlay";
@@ -237,12 +247,12 @@ function InteractiveSessionContent() {
     try {
       if (finalVideoBlob) { // Use finalVideoBlob here
         console.log("Attempting to upload recording to Flask...");
-        const videoFormData = new FormData();
+        const videoFormData = new FormData(); // Define videoFormData here, inside the if block
         videoFormData.append('video', finalVideoBlob, "user_recording.webm");
         videoFormData.append('name', name || 'unknown');
         videoFormData.append('email', email || 'unknown');
 
-        const uploadRes = await fetch(`${flaskApiUrl}/upload_video`, {
+        const uploadRes = await fetch(`${trimmedFlaskApiUrl}/upload_video`, { // Use trimmedFlaskApiUrl
           method: "POST",
           body: videoFormData,
         });
@@ -263,7 +273,7 @@ function InteractiveSessionContent() {
       }
 
       console.log("Attempting to send session log to Flask /log_full_session...");
-      const sessionLogRes = await fetch(`${flaskApiUrl}/log_full_session`, {
+      const sessionLogRes = await fetch(`${trimmedFlaskApiUrl}/log_full_session`, { // Use trimmedFlaskApiUrl
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -294,7 +304,6 @@ function InteractiveSessionContent() {
       router.push('/dashboard');
     }
   };
-
 
   useEffect(() => {
     if (!isBrowser || !navigator.mediaDevices?.getUserMedia) {
@@ -401,7 +410,7 @@ function InteractiveSessionContent() {
       });
       avatar.on(StreamingEvents.USER_START, (event) => console.log(">>>>> User started talking:", event));
       avatar.on(StreamingEvents.USER_STOP, (event) => console.log(">>>>> User stopped talking.", event)); // Added 'event' parameter
-      
+
       // Crucial: Pass the entire 'detail' object from the SDK event.
       avatar.on(StreamingEvents.USER_END_MESSAGE, (event) => {
         console.log("HeyGen: USER_END_MESSAGE event received. Detail:", event.detail);
@@ -426,7 +435,7 @@ function InteractiveSessionContent() {
           console.log("Connection quality changed:", detail);
         }
       );
-      
+
       console.log("Attempting to start Avatar video with config:", config);
       await startAvatar(config);
 
@@ -545,9 +554,10 @@ function InteractiveSessionContent() {
     return `${minutes.toString().padStart(2, '0')}:${remainingSeconds.toString().padStart(2, '0')}`;
   };
 
-  const toggleDocPanel = () => {
-    setShowDocPanel(prev => !prev);
-  };
+  // Removed: toggleDocPanel function is no longer needed
+  // const toggleDocPanel = () => {
+  //   setShowDocPanel(prev => !prev);
+  // };
 
   // REFINED HYDRATION FIX: Render the main structure consistently,
   // then conditionally render dynamic content within it.
@@ -558,7 +568,7 @@ function InteractiveSessionContent() {
     <div className="w-screen h-screen flex flex-col items-center bg-zinc-900 text-white relative">
       {/* Suppress hydration warning on H1 as its content might slightly differ initially on server */}
       <h1 className="text-3xl font-bold text-blue-400 mt-6 mb-4" suppressHydrationWarning>
-        🧠 Leo – {mounted ? (scenario || "N/A") : "Cargando..."}
+        🧠 Leo – {mounted ? (scenario || "Cargando...") : "Cargando..."}
       </h1>
 
       {/* Conditional content based on whether user data is available after mounted,
@@ -587,7 +597,7 @@ function InteractiveSessionContent() {
                   ) : (
                     !showAutoplayBlockedMessage && (
                         sessionState === StreamingAvatarSessionState.INACTIVE && (
-                            <AvatarConfig config={config} onConfigChange={setConfig} />
+                            <AvatarConfig config={config} onConfigChange={setConfig} readOnly />
                         )
                     )
                   )}
@@ -665,7 +675,8 @@ function InteractiveSessionContent() {
                 <MessageHistory />
               )}
 
-              {/* Doc Panel Toggle and Panel */}
+              {/* Removed: Doc Panel Toggle and Panel */}
+              {/*
               <button onClick={toggleDocPanel} className="fixed top-5 left-1/2 -translate-x-1/2 bg-blue-600 hover:bg-blue-700 text-white py-2 px-4 rounded-lg shadow-lg z-50 transition duration-300">
                 📘 Ver Documentación
               </button>
@@ -681,6 +692,7 @@ function InteractiveSessionContent() {
                 <h3 className="text-lg font-semibold text-blue-300 mb-2">⚖ Ética y Regulación</h3>
                 <p className="text-zinc-300 text-sm">✅ Está permitido compartir evidencia válida.<br/>⛔ Está prohibido comparar sin estudios o sugerir usos fuera de indicación.</p>
               </div>
+              */}
           </>
       )} {/* End of conditional rendering based on user data */}
 

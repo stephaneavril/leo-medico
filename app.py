@@ -14,17 +14,37 @@ import openai
 import boto3
 from botocore.exceptions import ClientError
 import re
+from flask import Flask, request, jsonify, send_file, redirect  # y lo que ya tuvieras
+app = Flask(__name__)
 
 print("\U0001F680 Iniciando Leo Virtual Trainer (Modo Simple)...")
 
-load_dotenv()
-openai.api_key = os.getenv("OPENAI_API_KEY")
-client = openai
+# Load environment variables from .env file
+load_dotenv(override=True)
 
+# Debugging print for all relevant env vars
+print(f"DEBUG: OPENAI_API_KEY (first 5 chars): {os.getenv('OPENAI_API_KEY', 'N/A')[:5]}...")
+print(f"DEBUG: AWS_ACCESS_KEY_ID: {os.getenv('AWS_ACCESS_KEY_ID', 'N/A')}")
+print(f"DEBUG: AWS_SECRET_ACCESS_KEY (last 5 chars): ...{os.getenv('AWS_SECRET_ACCESS_KEY', 'N/A')[-5:]}")
+
+# Retrieve AWS environment variables. Ensure no quotes or comments are in the .env file.
 AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
 AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
-AWS_S3_BUCKET_NAME = os.getenv("AWS_S3_BUCKET_NAME", "leo-trainer-videos")
+AWS_S3_BUCKET_NAME = os.getenv("AWS_S3_BUCKET_NAME", "").split("#",1)[0].strip().strip("'\"")
 AWS_S3_REGION_NAME = os.getenv("AWS_S3_REGION_NAME", "us-west-2")
+
+# >>>>> THIS IS THE CRITICAL DEBUGGING LINE <<<<<
+# It shows exactly what Flask is loading for the bucket name.
+print(f"DEBUG: Flask sees AWS_S3_BUCKET_NAME as: '{AWS_S3_BUCKET_NAME}'")
+# >>>>> THIS IS THE CRITICAL DEBUGGING LINE <<<<<
+
+# Validate essential AWS variables are not None after loading
+if not AWS_ACCESS_KEY_ID:
+    print("ERROR: AWS_ACCESS_KEY_ID is not set in .env")
+if not AWS_SECRET_ACCESS_KEY:
+    print("ERROR: AWS_SECRET_ACCESS_KEY is not set in .env")
+if not AWS_S3_BUCKET_NAME:
+    print("ERROR: AWS_S3_BUCKET_NAME is not set in .env") # This is what we expect to debug
 
 s3_client = boto3.client(
     's3',
@@ -32,6 +52,21 @@ s3_client = boto3.client(
     aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
     region_name=AWS_S3_REGION_NAME
 )
+
+@app.route("/get_presigned_url/<key>")
+def get_presigned_url(key):
+    """
+    Devuelve una URL firmada (1 h) para reproducir el vídeo privado
+    """
+    url = s3_client.generate_presigned_url(
+        ClientMethod="get_object",
+        Params={
+            "Bucket": AWS_S3_BUCKET_NAME,
+            "Key": key
+        },
+        ExpiresIn=3600          # 1 hora
+    )
+    return jsonify({"url": url})
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
@@ -41,7 +76,7 @@ def get_db_connection():
     database_url = os.getenv("DATABASE_URL")
     if not database_url:
         raise ValueError("DATABASE_URL environment variable is not set!")
-    
+
     parsed_url = urlparse(database_url)
     conn = psycopg2.connect(
         database=parsed_url.path[1:],
@@ -241,7 +276,7 @@ def clean_display_text(text: str) -> str:
 
     # Normalize common spaces/newlines before splitting
     text = text.replace('\r\n', ' ').replace('\n', ' ').strip()
-    
+
     # Replace common escaped UTF-8 sequences if they appear literally
     # This is a heuristic for specific mis-encodings like "\303\251" becoming literal text
     text = text.replace('\\303\\251', 'é') # Common for 'é'
@@ -262,7 +297,7 @@ def clean_display_text(text: str) -> str:
             cleaned_words_list.append(word)
         last_word = word
     text = ' '.join(cleaned_words_list)
-    
+
     # Remove consecutive repeated characters (e.g., "Buenoos" -> "Buenos")
     # This regex replaces 'aa', 'bb', etc. with 'a', 'b' only if they appear 3 or more times
     text = re.sub(r'(.)\1{2,}', r'\1\1', text) # Keep at least two, e.g., "hellooo" -> "helloo"
@@ -270,16 +305,16 @@ def clean_display_text(text: str) -> str:
     # Fix consecutive repeated words like "hola hola" -> "hola"
     # This regex is more robust for actual word repetitions
     text = re.sub(r'\b(\w+)\s+\1\b', r'\1', text, flags=re.IGNORECASE)
-    
+
     # Further cleaning for concatenated words without space (e.g., "diasdias" -> "dias dias")
     # This pattern looks for a word repeated immediately without a space in between, but is very aggressive.
     # It might be better to skip this if it causes false positives.
     # For 'HolaHola' specifically, you might want to specifically replace it.
     # text = re.sub(r'([a-zA-ZáéíóúÁÉÍÓÚñÑ]+?)\1([a-zA-ZáéíóúÁÉÍÓÚñÑ]*)', r'\1 \1\2', text)
-    
+
     # Fix multiple spaces
     text = re.sub(r'\s+', ' ', text).strip()
-    
+
     return text
 
 @app.route("/admin", methods=["GET", "POST"])
@@ -373,7 +408,14 @@ def admin_panel():
                       parsed_rh_evaluation = {"status": "No hay análisis de RH disponible."}
                 except (json.JSONDecodeError, TypeError):
                     parsed_rh_evaluation = {"status": "No hay análisis de RH disponible."}
-                
+
+
+                    # --- NUEVO ---
+                if row[6]:                                   # row[6] = s3_key
+                    video_url_for_template = f"/video/{row[6]}"
+                else:
+                    video_url_for_template = None
+# --------------
                 # Construct the row for the template with consistent indexing
                 # This list's indices should correspond to what admin.html now expects.
                 current_processed_row = [
@@ -383,7 +425,7 @@ def admin_panel():
                     cleaned_scenario, # 3: Scenario (for scenario display)
                     cleaned_user_segments, # 4: User dialogue (list of segments)
                     cleaned_avatar_segments, # 5: Avatar dialogue (list of segments)
-                    row[6], # 6: Video URL (audio_path)
+                    video_url_for_template, # 6: Video URL (audio_path)
                     row[7], # 7: Timestamp
                     row[8], # 8: Public Summary (evaluation)
                     parsed_rh_evaluation, # 9: RH evaluation (full dict for detailed analysis)
@@ -443,7 +485,7 @@ def admin_panel():
             name_u = row_data.get('name', "Unknown")
             email_u = row_data.get('email', "Unknown")
             secs = row_data.get('total_seconds_used', 0)
-            
+
             mins = secs // 60
             total_minutes_all_users += mins
             summary = "Buen desempeño general" if mins >= 15 else "Actividad moderada" if mins >= 5 else "Poca actividad, se sugiere seguimiento"
@@ -509,7 +551,7 @@ def start_session():
         secure   = False          # pon True cuando tengas HTTPS
     )
 
-    redirect_url = "http://localhost:3000/interactive-session"
+    redirect_url = "http://localhost:3000/dashboard"
     resp = make_response(redirect(redirect_url, code=302))
 
     for k, v in {
@@ -564,9 +606,18 @@ def validate_user_endpoint():
 from flask import jsonify
 from flask_cors import cross_origin
 import psycopg2.extras
+import json                           # <──  te hace falta para json.loads
+
+# Define SENTINELS aquí también si tu app.py usa esta lógica en otro lugar,
+# o asegúrate de que esté definida donde la uses.
+SENTINELS = [
+  'Video_Not_Available_Error',
+  'Video_Processing_Failed',
+  'Video_Missing_Error',
+]
 
 @app.route("/dashboard_data", methods=["POST"])
-@cross_origin()
+# @cross_origin() # Mantenlo si tienes problemas de CORS
 def dashboard_data():
     """
     Espera JSON con:  { "name": "...", "email": "..." , "token": "..." }
@@ -575,41 +626,108 @@ def dashboard_data():
     conn = None
     try:
         data = request.get_json(force=True)
-        name   = data.get("name")
-        email  = data.get("email")
-        token  = data.get("token")
+        name = data.get("name")
+        email = data.get("email")
+        token = data.get("token")
 
-        # 1) Validación muy básica del usuario
+        print(f"DEBUG_DASHBOARD_FLOW: Recibiendo solicitud para email: '{email}', token: '{token[:5]}...'") # Log de inicio
+
+        # 1) Validación del usuario
         if not check_user_token(email, token):
-            return jsonify({"error": "token inválido"}), 401
+            print(f"DEBUG_DASHBOARD_FLOW: ACCESO DENEGADO - Token inválido o usuario no autorizado para email: {email}")
+            return jsonify({"error": "token inválido o usuario no autorizado"}), 401
+        print(f"DEBUG_DASHBOARD_FLOW: Usuario '{email}' validado exitosamente.")
 
-        # 2) Consulta de sesiones y cálculo de tiempo en la MISMA transacción/cursor
+        # 2) Consulta de sesiones y cálculo de tiempo
         conn = get_db_connection()
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            # First query: Fetch sessions
+            # --- Primera consulta: Obtener los registros de sesiones ---
+            sql_query = """
+                SELECT
+                    id,
+                    scenario,
+                    timestamp AS created_at,
+                    duration_seconds AS duration,
+                    message AS user_transcript,
+                    response AS avatar_transcript,
+                    evaluation AS coach_advice,
+                    visual_feedback,
+                    audio_path AS video_s3,
+                    tip, -- CRÍTICO: Asegúrate de que esta columna exista en la DB y se llame 'tip'
+                    evaluation_rh AS rh_evaluation
+                FROM
+                    interactions
+                WHERE
+                    email = %s
+                ORDER BY
+                    timestamp DESC
+                LIMIT 50;
+            """
+            print(f"DEBUG_DASHBOARD_FLOW: Ejecutando consulta SQL para email: {email}")
+            cur.execute(sql_query, (email,))
+
+            raw_rows = cur.fetchall() # Esto debería traer los datos
+            sessions_to_send_to_frontend = [] # Inicializamos la lista aquí
+
+            print(f"DEBUG_DASHBOARD_FLOW: Se obtuvieron {len(raw_rows)} filas crudas de la DB para {email}.")
+            if not raw_rows:
+                print("DEBUG_DASHBOARD_FLOW: No hay filas de interacción para este usuario. La lista de sesiones será vacía.")
+
+            for i, row_dict in enumerate(raw_rows): # Iterar sobre cada diccionario de fila con índice
+                print(f"DEBUG_DASHBOARD_FLOW: Procesando fila {i+1}/{len(raw_rows)}: ID = {row_dict.get('id', 'N/A')}")
+                processed_session = dict(row_dict) # Crear una copia mutable
+
+                # --- Procesamiento de transcripciones ---
+                user_transcript_raw = processed_session.get("user_transcript", "[]")
+                try:
+                    processed_session["user_transcript"] = "\n".join(json.loads(user_transcript_raw))
+                    print(f"DEBUG_DASHBOARD_FLOW: User transcript parseado para {row_dict.get('id')}.")
+                except (json.JSONDecodeError, TypeError):
+                    processed_session["user_transcript"] = user_transcript_raw
+                    print(f"DEBUG_DASHBOARD_FLOW: User transcript NO es JSON para {row_dict.get('id')}. Usando raw.")
+
+                avatar_transcript_raw = processed_session.get("avatar_transcript", "[]")
+                try:
+                    processed_session["avatar_transcript"] = "\n".join(json.loads(avatar_transcript_raw))
+                    print(f"DEBUG_DASHBOARD_FLOW: Avatar transcript parseado para {row_dict.get('id')}.")
+                except (json.JSONDecodeError, TypeError):
+                    processed_session["avatar_transcript"] = avatar_transcript_raw
+                    print(f"DEBUG_DASHBOARD_FLOW: Avatar transcript NO es JSON para {row_dict.get('id')}. Usando raw.")
+
+                # --- Limpieza de otros campos de texto ---
+                processed_session["scenario"] = clean_display_text(processed_session.get("scenario", ""))
+                processed_session["coach_advice"] = clean_display_text(processed_session.get("coach_advice", ""))
+                processed_session["visual_feedback"] = clean_display_text(processed_session.get("visual_feedback", ""))
+                processed_session["tip"] = clean_display_text(processed_session.get("tip", "")) # Usa 'tip' directamente
+
+                # --- Generar URL prefirmada para el video ---
+                s3_key = processed_session.get("video_s3")
+                print(f"DEBUG_DASHBOARD_FLOW: Video S3 Key para {row_dict.get('id')}: '{s3_key}'")
+                if s3_key and s3_key not in SENTINELS:
+                    try:
+                        processed_session["video_s3"] = s3_client.generate_presigned_url(
+                            ClientMethod='get_object',
+                            Params={'Bucket': AWS_S3_BUCKET_NAME, 'Key': s3_key},
+                            ExpiresIn=3600
+                        )
+                        print(f"DEBUG_DASHBOARD_FLOW: URL prefirmada generada para {s3_key}")
+                    except ClientError as e:
+                        print(f"ERROR_DASHBOARD_FLOW: S3 ClientError al generar URL para {s3_key}: {e}")
+                        processed_session["video_s3"] = None
+                    except Exception as e:
+                        print(f"ERROR_DASHBOARD_FLOW: Error inesperado al generar URL para {s3_key}: {e}")
+                        processed_session["video_s3"] = None
+                else:
+                    processed_session["video_s3"] = None
+                    print(f"DEBUG_DASHBOARD_FLOW: Video S3 Key nulo o centinela para {row_dict.get('id')}. No se generó URL.")
+
+                sessions_to_send_to_frontend.append(processed_session) # ¡AGREGAR LA SESIÓN PROCESADA A LA LISTA!
+
+            print(f"DEBUG_DASHBOARD_FLOW: Se van a enviar {len(sessions_to_send_to_frontend)} sesiones procesadas al frontend.")
+
+            # --- Segunda consulta: Total de segundos usados ---
             cur.execute(
                 """
-                SELECT  id,
-                        scenario,
-                        timestamp as created_at,         -- Map 'timestamp' from 'interactions' to 'created_at'
-                        duration_seconds as duration,    -- Map 'duration_seconds' to 'duration'
-                        message as user_transcript,      -- Map 'message' (user input) to 'user_transcript'
-                        response as avatar_transcript,   -- Map 'response' (Leo's response) to 'avatar_transcript'
-                        evaluation as coach_advice,      -- Map 'evaluation' to 'coach_advice'
-                        visual_feedback,                 -- Direct map
-                        audio_path as video_s3           -- Map 'audio_path' (S3 key) to 'video_s3'
-                FROM    interactions                     -- Change table name from 'sessions' to 'interactions'
-                WHERE   email = %s
-                ORDER BY timestamp DESC
-                LIMIT   50;
-                """,
-                (email,),
-            )
-            sessions = cur.fetchall()
-
-            # Second query: Calculate total used seconds (using the SAME open cursor)
-            cur.execute(
-                 """
                 SELECT COALESCE(SUM(duration_seconds), 0) AS total_seconds_used
                 FROM interactions
                 WHERE email = %s;
@@ -617,23 +735,33 @@ def dashboard_data():
                 (email,)
             )
             result = cur.fetchone()
-            total_used_seconds = result['total_seconds_used'] if result is not None else 0
+            total_used_seconds = result["total_seconds_used"] if result else 0
+            print(f"DEBUG_DASHBOARD_FLOW: Total segundos usados para {email}: {total_used_seconds}")
 
-        return jsonify({"sessions": sessions, "used_seconds": total_used_seconds}), 200
+        # --- Respuesta final JSON ---
+        return jsonify(
+            {
+                "sessions": sessions_to_send_to_frontend, # ESTA ES LA LISTA QUE DEBE CONTENER LOS DATOS
+                "used_seconds": total_used_seconds
+            }
+        ), 200
 
     except Exception as e:
-        app.logger.exception("dashboard_data error")
-        return jsonify({"error": str(e)}), 500
-
+        app.logger.exception("dashboard_data error general - EXCEPCIÓN CAPTURADA")
+        return jsonify({"error": f"Error interno del servidor al obtener datos del dashboard: {str(e)}"}), 500
     finally:
         if conn:
             conn.close()
 
 @app.route("/video/<path:filename>")
 def serve_video(filename):
-    s3_video_url = f"https://{AWS_S3_BUCKET_NAME}.s3.{AWS_S3_REGION_NAME}.amazonaws.com/{filename}"
-    print(f"[SERVE VIDEO] Redirigiendo a S3: {s3_video_url}")
-    return redirect(s3_video_url, code=302)
+    presigned = s3_client.generate_presigned_url(
+        ClientMethod='get_object',
+        Params={'Bucket': AWS_S3_BUCKET_NAME, 'Key': filename},
+        ExpiresIn=3600
+    )
+    print(f"[SERVE VIDEO] -> {presigned}")
+    return redirect(presigned, code=302)
 
 @app.route('/upload_video', methods=['POST'])
 def upload_video():

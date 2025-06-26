@@ -126,9 +126,7 @@ const useStreamingAvatarVoiceChatState = () => {
 // ADDED: Definition for useStreamingAvatarMessageState (already present, but confirming its placement)
 const useStreamingAvatarMessageState = () => {
   const [messages, setMessages] = useState<Message[]>([]);
-  // This ref tracks the sender of the *current, ongoing* message.
-  const currentSenderRef = useRef<MessageSender | null>(null);
-  // This ref stores the message ID of the *current, ongoing* message.
+  // Este ref rastrea el ID del mensaje actual para concatenar segmentos.
   const currentMessageIdRef = useRef<string | null>(null);
 
   const handleNewSegment = useCallback((
@@ -136,103 +134,85 @@ const useStreamingAvatarMessageState = () => {
     sender: MessageSender,
     messageId: string // Unique ID for this utterance/segment
   ) => {
-    if (!newSegment.trim()) { // Ignore empty or whitespace-only segments
+    const trimmedNewSegment = newSegment.trim();
+    if (!trimmedNewSegment) {
+        console.log(`Context: handleNewSegment - IGNORANDO SEGMENTO VACÍO de ${sender}.`);
         return;
     }
 
     setMessages((prev) => {
       const safePrev = Array.isArray(prev) ? prev : [];
+      const lastMessage = safePrev.length > 0 ? safePrev[safePrev.length - 1] : null;
 
-      // If the sender is the same AND it's the same logical message (same ID)
-      // then we append to the last message.
-      if (currentSenderRef.current === sender && currentMessageIdRef.current === messageId && safePrev.length > 0) {
-        const lastMessage = safePrev[safePrev.length - 1];
-        const lastContent = typeof lastMessage?.content === 'string' ? lastMessage.content : '';
+      // Concatenar al último mensaje si es del mismo hablante Y el mismo ID de mensaje
+      if (lastMessage && lastMessage.sender === sender && lastMessage.id === messageId) {
+        const lastContent = typeof lastMessage.content === 'string' ? lastMessage.content : '';
 
-        // Add a space if the last character wasn't already a space/punctuation
-        const contentToAdd = (lastContent.endsWith(' ') || lastContent.endsWith('.') || lastContent.endsWith('?') || lastContent.endsWith('!'))
-                             ? newSegment.trim()
-                             : (lastContent ? ' ' : '') + newSegment.trim();
-
-        // Prevent adding completely identical consecutive words/phrases if already joined
-        // This is a basic de-duplication, more advanced might use diffing
-        if (lastContent.endsWith(newSegment.trim())) { // If the new segment is identical to the end of the last, skip
-            return prev; 
-        }
-        if (lastContent.includes(newSegment.trim()) && lastContent.slice(-newSegment.trim().length * 2).includes(newSegment.trim())) {
-            // Heuristic: if newSegment is a repetition of the last part of lastContent
+        // Si el nuevo segmento ya es parte del contenido final o es idéntico, ignorar para evitar duplicados exactos
+        if (lastContent.endsWith(trimmedNewSegment) || lastContent.trim() === trimmedNewSegment) {
+            console.log(`Context: handleNewSegment - SKIPPING DUPLICADO/FINALIZADO de ${sender} (ID: ${messageId}): "${trimmedNewSegment}" (contenido previo: "${lastContent}")`);
             return prev;
         }
 
+        // Añadir espacio si es necesario
+        const contentToAdd = (lastContent.length > 0 && ![',', '.', '?', '!'].includes(lastContent.slice(-1)))
+                             ? ' ' + trimmedNewSegment
+                             : trimmedNewSegment;
 
+        console.log(`Context: handleNewSegment - CONCATENANDO a ${sender} (ID: ${messageId}): "${trimmedNewSegment}" (nuevo contenido: "${lastContent + contentToAdd}")`);
         return [
           ...safePrev.slice(0, -1),
           {
             ...lastMessage,
-            content: lastContent + contentToAdd, // Concatenate carefully
+            content: lastContent + contentToAdd,
           },
         ];
       } else {
-        // Start a new message
-        currentSenderRef.current = sender;
-        currentMessageIdRef.current = messageId; // Update message ID for new logical message
+        // Iniciar un nuevo mensaje
+        console.log(`Context: handleNewSegment - INICIANDO NUEVO mensaje para ${sender} (ID: ${messageId}): "${trimmedNewSegment}"`);
+        // Actualizar el ref del ID del mensaje actual para la próxima concatenación
+        currentMessageIdRef.current = messageId;
         return [
           ...safePrev,
           {
-            id: Date.now().toString() + '_' + sender + '_' + messageId, // Ensure unique ID for React keys
+            id: messageId, // Usamos el messageId de HeyGen como el ID de la entrada
             sender: sender,
-            content: newSegment.trim(),
+            content: trimmedNewSegment,
           },
         ];
       }
     });
-  }, []);
+  }, []); // Dependencias: ninguna, useCallback es estable
 
-
+  // handleUserTalkingMessage y handleStreamingTalkingMessage se mantienen igual
   const handleUserTalkingMessage = useCallback(({ detail }: { detail: UserTalkingMessageEvent; }) => {
-    // HeyGen's USER_TALKING_MESSAGE and AVATAR_TALKING_MESSAGE events have a `message` property directly.
-    // The `detail` property often contains additional metadata like `task_id`.
     const messageContent = typeof detail.message === 'string' ? detail.message : '';
-    const messageId = detail.task_id || Date.now().toString(); // Use task_id for message ID if available
+    const messageId = detail.task_id || `user_${Date.now().toString()}`; // Fallback ID
 
-    // Log the incoming message to debug the frontend events
-    console.log('Context: handleUserTalkingMessage - Incoming:', { message: messageContent, id: messageId, sender: MessageSender.CLIENT });
-
-    // IMPORTANT: Ensure the sender is correctly identified before calling handleNewSegment
-    // If this handler is being called with Avatar's speech, there's a problem upstream in HeyGen event routing or your listeners.
-    // For now, we'll process it as User, but be aware this is the source of misattribution if it happens frequently.
+    console.log(`Context: handleUserTalkingMessage - RECIBIDO: "${messageContent}" (ID: ${messageId}, Hablante: CLIENT)`);
     handleNewSegment(messageContent, MessageSender.CLIENT, messageId);
   }, [handleNewSegment]);
 
-
   const handleStreamingTalkingMessage = useCallback(({ detail }: { detail: StreamingTalkingMessageEvent; }) => {
-    // HeyGen's USER_TALKING_MESSAGE and AVATAR_TALKING_MESSAGE events have a `message` property directly.
     const messageContent = typeof detail.message === 'string' ? detail.message : '';
-    const messageId = detail.task_id || Date.now().toString(); // Use task_id for message ID if available
+    const messageId = detail.task_id || `avatar_${Date.now().toString()}`; // Fallback ID
 
-    // Log the incoming message to debug the frontend events
-    console.log('Context: handleStreamingTalkingMessage - Incoming:', { message: messageContent, id: messageId, sender: MessageSender.AVATAR });
-
-    // IMPORTANT: Ensure the sender is correctly identified before calling handleNewSegment
-    // If this handler is being called with User's speech, there's a problem upstream in HeyGen event routing or your listeners.
+    console.log(`Context: handleStreamingTalkingMessage - RECIBIDO: "${messageContent}" (ID: ${messageId}, Hablante: AVATAR)`);
     handleNewSegment(messageContent, MessageSender.AVATAR, messageId);
   }, [handleNewSegment]);
 
-
   const handleEndMessage = useCallback(() => {
-    // When an utterance ends, finalize the current message.
-    // Reset sender and message ID so next segment starts a new message.
-    currentSenderRef.current = null;
-    currentMessageIdRef.current = null;
-    console.log('Context: handleEndMessage called. Message finalized for next turn.');
+    // Cuando una locución termina, finaliza el mensaje actual.
+    // Esto asegura que la próxima locución empiece un NUEVO mensaje en la historia.
+    currentMessageIdRef.current = null; // Reseteamos el ID del mensaje para forzar un nuevo mensaje.
+    console.log('Context: handleEndMessage llamado. Mensaje finalizado para el próximo turno.');
   }, []);
 
   return {
     messages,
     clearMessages: useCallback(() => {
-      console.log('Context: clearMessages called.');
+      console.log('Context: clearMessages llamado.');
       setMessages([]);
-      currentSenderRef.current = null;
       currentMessageIdRef.current = null;
     }, []),
     handleUserTalkingMessage,
@@ -240,7 +220,6 @@ const useStreamingAvatarMessageState = () => {
     handleEndMessage,
   };
 };
-
 // ADDED: Definitions for the missing state hooks
 const useStreamingAvatarListeningState = () => {
   const [isListening, setIsListening] = useState(false);

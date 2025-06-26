@@ -1,626 +1,342 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Panel de RH - Evaluación de Sesiones</title>
-  
-  <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700&family=Open+Sans:wght@400;600&display=swap" rel="stylesheet">
-  
-  <style>
-    /* Colores base: Alfasigma azul oscuro, azul cielo, rojo para alertas, blanco/gris claro */
-    :root {
-      --primary-dark: #0c0e2c; /* Alfasigma dark blue */
-      --primary-light: #00bfff; /* Sky blue */
-      --secondary-red: #cc0000; /* Alert red */
-      --text-dark: #333;
-      --text-light: #f4f6fa;
-      --bg-light: #f4f6fa;
-      --bg-white: #ffffff;
-      --border-color: #e0e0e0;
-      --shadow-light: rgba(0,0,0,0.05);
-    }
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Panel de RH – Evaluación de Sesiones</title>
 
-    body {
-      margin: 0;
-      font-family: 'Open Sans', sans-serif;
-      background-color: var(--bg-light);
-      color: var(--text-dark);
-      line-height: 1.6;
-    }
+  <!-- Tipografías corporativas -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700&family=Open+Sans:wght@400;600&display=swap" rel="stylesheet">
 
-    header {
-      background: var(--primary-dark);
-      color: var(--text-light);
-      padding: 20px 40px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between; /* To place logo and title */
-      box-shadow: 0 2px 8px var(--shadow-light);
-    }
+  <style>
+    /* ---------- PALETA Y VARIABLES ---------- */
+    :root{
+      --primary-dark:#0c0e2c;      /* azul Alfasigma */
+      --primary-mid:#003559;
+      --primary-light:#00bfff;     /* cian */
+      --secondary-red:#cc0000;
+      --text-dark:#222;
+      --text-light:#e6e8ef;
+      --bg-gray:#f4f6fa;
+      --bg-white:#ffffff;
+      --border:#e0e0e0;
+      --shadow-lg:rgba(0,0,0,.3);
+      --shadow-sm:rgba(0,0,0,.05);
+    }
 
-    header img {
-        height: 45px; /* Slightly larger logo */
-        vertical-align: middle;
-        margin-right: 15px; /* Space between logo and title */
-    }
+    /* ---------- RESET ---------- */
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    html{scroll-behavior:smooth}
+    body{
+      font-family:'Open Sans',sans-serif;
+      line-height:1.55;
+      background:var(--primary-dark);
+      color:var(--text-light);
+    }
+    a{color:var(--primary-light);text-decoration:none}
 
-    header h1 {
-      margin: 0;
-      font-size: 26px; /* Slightly larger title */
-      font-family: 'Montserrat', sans-serif;
-      font-weight: 700;
-      flex-grow: 1; /* Allows title to take available space */
-    }
+    /* ---------- HEADER ---------- */
+    header{
+      display:flex;align-items:center;gap:16px;
+      padding:16px 32px;
+      background:linear-gradient(90deg,var(--primary-dark) 0%,var(--primary-mid) 50%,var(--primary-light) 100%);
+      box-shadow:0 2px 6px rgba(0,0,0,.45);
+    }
+    header img{height:48px}
+    header h1{
+      font-family:'Montserrat',sans-serif;
+      font-weight:700;
+      font-size:28px;
+      color:#fff;
+    }
 
-    .container {
-      padding: 30px 40px;
-      max-width: 1200px; /* Limit content width for better readability */
-      margin: 0 auto; /* Center the container */
-    }
+    /* ---------- LAYOUT ---------- */
+    .container{max-width:1200px;margin:0 auto;padding:40px 32px}
 
-    .section-title {
-      font-family: 'Montserrat', sans-serif;
-      font-weight: 700;
-      font-size: 24px;
-      color: var(--primary-dark);
-      margin-top: 40px;
-      margin-bottom: 20px;
-      border-bottom: 2px solid var(--primary-light);
-      padding-bottom: 10px;
-    }
+    .section-title{
+      font:600 24px 'Montserrat',sans-serif;
+      margin:40px 0 24px;
+      border-bottom:2px solid var(--primary-light);
+      padding-bottom:10px;
+    }
 
-    .session-entry {
-      background: var(--bg-white);
-      padding: 25px; /* Increased padding */
-      margin-bottom: 25px; /* Increased margin */
-      border-radius: 12px; /* More rounded corners */
-      box-shadow: 0 6px 20px var(--shadow-light); /* More prominent shadow */
-      border: 1px solid var(--border-color);
-    }
+    /* ---------- SESSION ENTRY ---------- */
+    .session-entry{
+      background:var(--bg-white);
+      color:var(--text-dark);
+      border-radius:16px;
+      box-shadow:0 8px 24px var(--shadow-lg);
+      padding:24px;
+      margin-bottom:40px;
+      display:grid;
+      grid-template-columns:1fr;
+      gap:24px;
+    }
+    @media (min-width:1024px){
+      .session-entry{grid-template-columns:1fr 380px}
+    }
+    .session-entry h3{
+      font:600 20px 'Montserrat',sans-serif;
+      color:var(--primary-dark);
+      margin-bottom:12px;
+      border-bottom:1px solid #eee;
+      padding-bottom:8px;
+    }
+    .session-info strong{color:#555}
 
-    .session-entry h3 {
-      margin-top: 0;
-      font-family: 'Montserrat', sans-serif;
-      font-weight: 600;
-      font-size: 20px;
-      color: var(--primary-dark);
-      border-bottom: 1px solid #eee;
-      padding-bottom: 10px;
-      margin-bottom: 15px;
-    }
+    /* ---------- VIDEO ---------- */
+    video{
+      width:100%;
+      border:1px solid var(--primary-light);
+      border-radius:12px;
+      object-fit:cover;
+      box-shadow:0 4px 10px rgba(0,0,0,.15);
+    }
 
-    .session-info strong {
-        color: #555; /* Slightly darker for labels */
-    }
+    /* ---------- CHAT ---------- */
+    .chat-log ul{list-style:none;padding:0;margin:0}
+    .chat-log li{display:flex;margin-bottom:12px}
+    .bubble{
+      padding:10px 14px;
+      border-radius:12px;
+      font-size:15px;
+      max-width:100%;
+    }
+    /* usuario = violeta, doctora = cian */
+    .user   .bubble{background:rgba(128,90,213,.15);border-left:6px solid #805ad5}
+    .doctor .bubble{background:rgba(0,191,255,.15);border-left:6px solid var(--primary-light)}
 
-    .chat-log {
-      background: #eef7fc; /* Lighter blue background */
-      border-left: 5px solid var(--primary-light); /* Thicker, more prominent border */
-      padding: 15px; /* More padding */
-      margin-top: 20px; /* More margin */
-      font-size: 15px;
-      border-radius: 8px; /* Rounded corners */
-    }
-    .chat-log p {
-        margin: 5px 0; /* Adjust spacing within chat log */
-    }
-    .chat-log ul {
-        list-style-type: disc; /* Bullet points */
-        padding-left: 20px; /* Indent list */
-        margin-top: 5px;
-        margin-bottom: 5px;
-    }
-    .chat-log li {
-        margin-bottom: 5px; /* Space between list items */
-    }
+    /* ---------- EVALUACIONES ---------- */
+    .evaluation{
+      margin-top:20px;
+      padding:15px;
+      border-radius:8px;
+      background:#e0f7fa;
+      border-left:5px solid #0099cc;
+      color:var(--text-dark);
+    }
+    .evaluation.rh{
+      background:#ffeeee;
+      border-left-color:var(--secondary-red);
+    }
+    .evaluation.rh h4{color:var(--secondary-red);margin:15px 0 5px;font:600 1em 'Montserrat'}
 
+    .metric-line{
+      display:flex;justify-content:space-between;
+      padding:5px 0;border-bottom:1px dashed #f0c0c0;font-size:.95em
+    }
+    .metric-line:last-child{border-bottom:none;}
 
-    .evaluation {
-      background: #e0f7fa; /* Light cyan */
-      padding: 15px;
-      margin-top: 20px;
-      border-left: 5px solid #0099cc; /* Darker blue border */
-      border-radius: 8px;
-    }
+    /* ---------- TABLAS ---------- */
+    table{width:100%;border-collapse:collapse;margin-top:20px}
+    th,td{padding:12px 8px;font-size:14px}
+    th{
+      background:#f8f8f8;color:var(--primary-dark);
+      font:600 .8rem 'Montserrat';text-transform:uppercase
+    }
+    tr:nth-child(even){background:#fdfdfd}
+    tr:hover{background:#f0f8ff}
 
-    .evaluation strong {
-        color: #007bb5; /* Stronger blue for evaluation labels */
-    }
+    /* ---------- PROGRESS ---------- */
+    .progress-bar{background:#e9ecef;border-radius:8px;overflow:hidden;height:25px;margin-top:15px;border:1px solid #dee2e6}
+    .progress-fill{
+      height:100%;
+      background:linear-gradient(to right,#00bfff,#007bff);
+      display:flex;align-items:center;justify-content:flex-end;
+      padding-right:10px;color:#fff;font-weight:bold;font-size:.9em;
+      transition:width .4s ease-out;
+    }
 
-    .evaluation.rh {
-      background: #ffeeee; /* Very light red */
-      border-left: 5px solid var(--secondary-red); /* Strong red border */
-    }
-    .evaluation.rh strong {
-        color: var(--secondary-red); /* Strong red for RH labels */
-    }
+    /* ---------- FORMULARIOS / BOTONES ---------- */
+    form{display:flex;flex-wrap:wrap;gap:10px;margin-top:15px;align-items:end}
+    label{font-weight:600;color:#555}
+    input[type=text],input[type=email],input[type=date]{
+      flex:1;min-width:150px;padding:10px 12px;border-radius:6px;border:1px solid #ccc;
+      box-shadow:inset 0 1px 3px rgba(0,0,0,.05);transition:border-color .2s ease;
+    }
+    input:focus{border-color:var(--primary-light);outline:none}
+    button{
+      padding:10px 18px;border:none;border-radius:6px;
+      background:var(--primary-light);color:#000;font-weight:600;font-size:15px;
+      cursor:pointer;transition:background .2s ease,transform .1s ease;
+      white-space:nowrap;
+    }
+    button:hover{background:#009acd;transform:translateY(-1px)}
+    button:active{transform:translateY(0)}
+    /* botones especiales */
+    .user-management-actions button[name=toggle]{background:#ffc107;color:var(--text-dark)}
+    .user-management-actions button[name=toggle]:hover{background:#e0a800}
+    .user-management-actions button[name=regen_token]{background:#6c757d}
+    .user-management-actions button[name=regen_token]:hover{background:#5a6268}
 
-    video {
-      width: 100%;
-      max-width: 500px; /* Slightly larger video preview */
-      margin-top: 20px; /* More margin */
-      border-radius: 8px;
-      box-shadow: 0 4px 10px rgba(0,0,0,0.1); /* Subtle shadow on video */
-      display: block; /* Ensures it takes full width up to max-width */
-    }
-
-    .users-section, .summary-row {
-      background: var(--bg-white);
-      margin-top: 40px;
-      padding: 25px;
-      border-radius: 12px;
-      box-shadow: 0 6px 20px var(--shadow-light);
-      border: 1px solid var(--border-color);
-    }
-
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      margin-top: 20px;
-    }
-
-    th, td {
-      border: 1px solid var(--border-color);
-      padding: 12px 8px; /* More padding in table cells */
-      text-align: left; /* Align text left for better readability */
-      font-size: 14px;
-    }
-
-    th {
-      background-color: #f8f8f8; /* Lighter grey for headers */
-      font-family: 'Montserrat', sans-serif;
-      font-weight: 600;
-      color: var(--primary-dark);
-      text-transform: uppercase; /* Uppercase table headers */
-    }
-    
-    tr:nth-child(even) { /* Zebra striping for tables */
-        background-color: #fdfdfd;
-    }
-    tr:hover { /* Hover effect for table rows */
-        background-color: #f0f8ff;
-    }
-
-    h2, h3 {
-      font-family: 'Montserrat', sans-serif;
-      font-weight: 700;
-      color: var(--primary-dark);
-      margin-top: 0; /* Reset margin from previous style */
-    }
-
-    /* Form styling */
-    form {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 10px; /* Spacing between form elements */
-        margin-top: 15px;
-        align-items: center;
-    }
-    form.user-management-actions { /* Styles for inline forms in user actions */
-        display: inline-flex;
-        margin: 0;
-        gap: 5px;
-    }
-
-    form input[type="text"], 
-    form input[type="email"], 
-    form input[type="date"],
-    form input[type="password"] { /* Added password type for login if needed */
-      flex: 1; /* Allow inputs to grow */
-      min-width: 150px; /* Minimum width for inputs */
-      padding: 10px 12px;
-      border-radius: 6px;
-      border: 1px solid #ccc;
-      box-shadow: inset 0 1px 3px rgba(0,0,0,0.05);
-      transition: border-color 0.2s ease;
-    }
-    form input:focus {
-        border-color: var(--primary-light);
-        outline: none;
-    }
-
-    form button {
-      padding: 10px 18px; /* Larger buttons */
-      border: none;
-      border-radius: 6px;
-      background-color: var(--primary-light);
-      color: white;
-      cursor: pointer;
-      font-size: 15px;
-      font-weight: 600;
-      transition: background-color 0.2s ease, transform 0.1s ease;
-      white-space: nowrap; /* Prevent button text from wrapping */
-    }
-
-    form button:hover {
-      background-color: #009acd;
-      transform: translateY(-1px); /* Slight lift effect */
-    }
-    form button:active {
-        transform: translateY(0); /* Press down effect */
-    }
-
-    /* Specific button overrides for user actions */
-    form.user-management-actions button {
-        padding: 8px 12px;
-        font-size: 13px;
-    }
-    form.user-management-actions button[name="action"][value="toggle"] {
-        background-color: #ffc107; /* Orange for toggle */
-        color: var(--text-dark);
-    }
-    form.user-management-actions button[name="action"][value="toggle"]:hover {
-        background-color: #e0a800;
-    }
-    form.user-management-actions button[name="action"][value="regen_token"] {
-        background-color: #6c757d; /* Grey for new token */
-    }
-    form.user-management-actions button[name="action"][value="regen_token"]:hover {
-        background-color: #5a6268;
-    }
-
-    .summary-row h3 {
-      font-size: 20px;
-    }
-
-    .progress-bar {
-      background: #e9ecef; /* Lighter background for bar */
-      border-radius: 8px;
-      overflow: hidden;
-      height: 25px; /* Taller bar */
-      margin-top: 15px;
-      border: 1px solid #dee2e6;
-    }
-
-    .progress-fill {
-      height: 100%;
-      background: linear-gradient(to right, #00bfff, #007bff); /* Gradient for progress */
-      transition: width 0.4s ease-out; /* Smoother transition */
-      display: flex;
-      align-items: center;
-      justify-content: flex-end;
-      padding-right: 10px;
-      box-sizing: border-box;
-      color: white;
-      font-weight: bold;
-      font-size: 0.9em;
-      text-shadow: 1px 1px 2px rgba(0,0,0,0.2);
-    }
-    .progress-fill span {
-        white-space: nowrap;
-    }
-
-    /* Styles for the new structured RH analysis (from previous iteration) */
-    .evaluation.rh h4 {
-        color: var(--secondary-red); /* Darker red for sub-headings */
-        margin-top: 15px;
-        margin-bottom: 5px;
-        font-family: 'Montserrat', sans-serif;
-        font-weight: 600;
-    }
-
-    .evaluation.rh ul {
-        list-style-type: none; /* Remove default bullets */
-        padding-left: 0;
-        margin-left: 0;
-    }
-
-    .evaluation.rh li {
-        margin-bottom: 8px;
-        padding-left: 20px; /* Indent list items */
-        position: relative; /* For custom bullet points */
-    }
-    .evaluation.rh li::before { /* Custom bullet points */
-        content: '•';
-        color: var(--primary-light); /* Blue bullet */
-        position: absolute;
-        left: 0;
-        top: 0;
-    }
-    .evaluation.rh li strong {
-        color: var(--text-dark); /* Ensure strong text is dark */
-    }
-    .metric-line {
-        display: flex;
-        justify-content: space-between;
-        padding: 5px 0;
-        border-bottom: 1px dashed #f0c0c0;
-        font-size: 0.95em;
-    }
-    .metric-line:last-child {
-        border-bottom: none;
-    }
-    .metric-label {
-        font-weight: 600; /* Bolder label */
-    }
-    .metric-value {
-        text-align: right;
-        font-weight: 400;
-    }
-    .status-icon {
-        font-size: 1.1em;
-        margin-right: 5px;
-    }
-
-    /* Footer styling */
-    footer {
-        text-align: center;
-        padding: 30px;
-        margin-top: 50px;
-        font-size: 0.9em;
-        color: #777;
-        border-top: 1px solid #eee;
-        background-color: var(--bg-white);
-    }
-    footer a {
-        color: var(--primary-light);
-        text-decoration: none;
-        font-weight: 600;
-    }
-    footer a:hover {
-        text-decoration: underline;
-    }
-
-    /* Adjust specific forms for layout */
-    .users-section form {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-        gap: 15px;
-        align-items: end;
-    }
-    .users-section form button {
-        grid-column: span 1; /* Ensure button fits in grid */
-    }
-    .users-section form input {
-        width: auto; /* Let grid control width */
-    }
-    .users-section form label {
-        display: block; /* Ensure labels are on their own line */
-        margin-bottom: 5px;
-        font-weight: 600;
-        color: #555;
-    }
-    .users-section form input[type="date"] {
-        min-width: 120px;
-    }
-    .users-section h3 { /* For "Crear nuevo usuario" */
-        margin-top: 30px;
-        padding-top: 15px;
-        border-top: 1px dashed var(--border-color);
-    }
-  </style>
+    /* ---------- FOOTER ---------- */
+    footer{text-align:center;padding:32px;margin-top:50px;font-size:.9em;color:#777;background:var(--bg-white)}
+    footer a{color:var(--primary-light);font-weight:600}
+  </style>
 </head>
+
 <body>
-  <header>
-    <img src="{{ url_for('static', filename='logo-alfasigma.png') }}" alt="Alfasigma">
-    <h1>📊 Panel de RH - Evaluación de Sesiones</h1>
-  </header>
+  <!-- ===== HEADER ===== -->
+  <header>
+    <img src="{{ url_for('static', filename='logo-alfasigma.png') }}" alt="Alfasigma">
+    <h1>📊 Panel de RH – Evaluación de Sesiones</h1>
+  </header>
 
-  <div class="container">
-    <h2 class="section-title">Resultados de Sesiones Individuales</h2>
-    {% for row in data %}
-      <div class="session-entry">
-        <h3>{{ row[1] }} <span style="font-weight: normal; color: #777;">({{ row[2] }})</span></h3>
-        <p class="session-info">
-            <strong>Escenario:</strong> {{ row[3] }}<br>
-            <strong>Fecha:</strong> {{ row[7] }}
-        </p>
+  <div class="container">
+    <!-- ===== SESIONES ===== -->
+    <h2 class="section-title">Resultados de Sesiones Individuales</h2>
+    {% for row in data %}
+      <div class="session-entry">
+        <!-- Datos sesión -->
+        <div>
+          <h3>{{ row[1] }} <span style="font-weight:normal;color:#777">({{ row[2] }})</span></h3>
+          <p class="session-info">
+            <strong>Escenario:</strong> {{ row[3] }}<br>
+            <strong>Fecha:</strong> {{ row[7] }}
+          </p>
 
-        <div class="chat-log">
-          <p><strong>Participante:</strong></p>
-          <ul>
-            {% for segment in row[4] %}
-              <li>{{ segment }}</li>
-            {% endfor %}
-          </ul>
-          <p class="mt-3"><strong>Leo:</strong></p>
-          <ul>
-            {% for segment in row[5] %}
-              <li>{{ segment }}</li>
-            {% endfor %}
-          </ul>
-        </div>
+          <!-- CHAT -->
+          <div class="chat-log">
+            <p><strong>👤 Usuario:</strong></p>
+            <ul>
+              {% for segment in row[4] if segment.strip() %}
+                <li class="user"><span class="bubble">{{ segment }}</span></li>
+              {% endfor %}
+            </ul>
 
-        {% if row[6] and row[6] != "Video_Not_Available_Error" and row[6] != "Video_Processing_Failed" and row[6] != "Video_Missing_Error" %}
-       <video controls>
-        <source src="{{ row[6] }}" type="video/mp4" />
-      Tu navegador no soporta la reproducción de video.
-      </video>
-        {% else %}
-          <p style="color: gray; text-align: center;">⏳ Esta sesión se mostrará completa cuando el análisis haya terminado o el video no está disponible.</p>
-        {% endif %}
+            <p style="margin-top:8px"><strong>🩺 Doctora:</strong></p>
+            <ul>
+              {% for segment in row[5] if segment.strip() %}
+                <li class="doctor"><span class="bubble">{{ segment }}</span></li>
+              {% endfor %}
+            </ul>
+          </div>
 
+          <!-- RESÚMENES -->
+          <div class="evaluation">
+            <strong>Resumen para usuario:</strong><br>{{ row[8] }}
+          </div>
 
-        <div class="evaluation">
-          <strong>Resumen para usuario:</strong><br>
-          {{ row[8] }}
-        </div>
+          {% if row[9].overall_rh_summary %}
+          <div class="evaluation rh">
+            <strong>Análisis para RH:</strong>
+            <p><strong>Resumen General RH:</strong> {{ row[9].overall_rh_summary }}</p>
 
-        <div class="evaluation rh">
-          {% if row[9].overall_rh_summary %}
-            <strong>Análisis para RH:</strong><br>
-            <p><strong>Resumen General RH:</strong> {{ row[9].overall_rh_summary }}</p>
+            <!-- BLOQUE Da Vinci -->
+            <h4>🎯 Aplicación del Modelo de Ventas (Da Vinci)</h4>
+            {% set fb = row[9].gpt_detailed_feedback %}
+            <div class="metric-line"><span class="metric-label">Diagnóstico:</span><span class="metric-value">{{ fb.Diagnostico if fb else 'N/A' }}</span></div>
+            <div class="metric-line"><span class="metric-label">Argumentación:</span><span class="metric-value">{{ fb.Argumentacion if fb else 'N/A' }}</span></div>
+            <div class="metric-line"><span class="metric-label">Validación:</span><span class="metric-value">{{ fb.Validacion if fb else 'N/A' }}</span></div>
+            <div class="metric-line"><span class="metric-label">Cierre:</span><span class="metric-value">{{ fb.Cierre if fb else 'N/A' }}</span></div>
 
-            <h4>🎯 Aplicación del Modelo de Ventas (Da Vinci)</h4>
-            <div style="border: 1px solid var(--border-color); padding: 10px; border-radius: 5px;">
-                <div class="metric-line">
-                    <span class="metric-label">Diagnóstico:</span>
-                    <span class="metric-value">{{ row[9].gpt_detailed_feedback.Diagnostico if row[9].gpt_detailed_feedback and row[9].gpt_detailed_feedback.Diagnostico is defined else 'N/A' }}</span>
-                </div>
-                <div class="metric-line">
-                    <span class="metric-label">Argumentación:</span>
-                    <span class="metric-value">{{ row[9].gpt_detailed_feedback.Argumentacion if row[9].gpt_detailed_feedback and row[9].gpt_detailed_feedback.Argumentacion is defined else 'N/A'}}</span>
-                </div>
-                <div class="metric-line">
-                    <span class="metric-label">Validación:</span>
-                    <span class="metric-value">{{ row[9].gpt_detailed_feedback.Validacion if row[9].gpt_detailed_feedback and row[9].gpt_detailed_feedback.Validacion is defined else 'N/A'}}</span>
-                </div>
-                <div class="metric-line">
-                    <span class="metric-label">Cierre:</span>
-                    <span class="metric-value">{{ row[9].gpt_detailed_feedback.Cierre if row[9].gpt_detailed_feedback and row[9].gpt_detailed_feedback.Cierre is defined else 'N/A'}}</span>
-                </div>
-                <p style="text-align: right; margin-top: 5px; font-size: 0.85em; color: #666;">
-                    (Pasos detectados por análisis simple: {{ row[9].sales_model_simple_detection.steps_applied_count if row[9].sales_model_simple_detection and row[9].sales_model_simple_detection.steps_applied_count is defined else 'N/A' }})
-                </p>
-            </div>
+            <!-- OTROS KPI -->
+            <h4 style="margin-top:15px">🧠 Conocimientos y Habilidades Clave</h4>
+            <div class="metric-line"><span class="metric-label">Palabras clave científicas:</span><span class="metric-value">{{ row[9].knowledge_score or 'N/A' }}</span></div>
+            <div class="metric-line"><span class="metric-label">Escucha Activa (Simple):</span><span class="metric-value">{{ row[9].active_listening_simple_detection or 'N/A' }}</span></div>
+            <div class="metric-line"><span class="metric-label">Presencia en Video:</span><span class="metric-value">{{ row[9].visual_presence or 'N/A' }} ({{ row[9].visual_percentage or 'N/A' }})</span></div>
 
-            <h4>🧠 Conocimientos y Habilidades Clave</h4>
-            <div style="border: 1px solid var(--border-color); padding: 10px; border-radius: 5px;">
-                <div class="metric-line">
-                    <span class="metric-label">Palabras clave científicas:</span>
-                    <span class="metric-value">{{ row[9].knowledge_score if row[9].knowledge_score else 'N/A' }}</span>
-                </div>
-                <div class="metric-line">
-                    <span class="metric-label">Escucha Activa (Simple):</span>
-                    <span class="metric-value">{{ row[9].active_listening_simple_detection if row[9].active_listening_simple_detection else 'N/A' }}</span>
-                </div>
-                <div class="metric-line">
-                    <span class="metric-label">Presencia en Video:</span>
-                    <span class="metric-value">{{ row[9].visual_presence if row[9].visual_presence else 'N/A' }} ({{ row[9].visual_percentage if row[9].visual_percentage else 'N/A' }})</span>
-                </div>
-            </div>
+            {% if fb and fb.overall_evaluation %}
+              <h4 style="margin-top:15px">Comentarios Detallados de la IA</h4>
+              <p><strong>Evaluación general:</strong> {{ fb.overall_evaluation }}</p>
+              {% if fb.Areas_de_mejora %}
+                <p><strong>Áreas de Mejora:</strong></p>
+                <ul>
+                  {% for area in fb.Areas_de_mejora %}
+                    <li>{{ area }}</li>
+                  {% endfor %}
+                </ul>
+              {% endif %}
+            {% endif %}
+          </div>
+          {% endif %}
 
-            {% if row[9].gpt_detailed_feedback %}
-              <h4>Comentarios Detallados de la Inteligencia Artificial:</h4>
-              <div style="background: #fdfdff; padding: 15px; border-radius: 8px; border: 1px solid #e9e9e9;">
-                {% if row[9].gpt_detailed_feedback.overall_evaluation %}
-                  <p><strong>Evaluación General de la IA:</strong> {{ row[9].gpt_detailed_feedback.overall_evaluation }}</p>
-                {% endif %}
+          <!-- BOTÓN ELIMINAR -->
+          <div style="margin-top:20px;text-align:right">
+            <form action="/admin/delete_session/{{ row[0] }}" method="POST" onsubmit="return confirm('¿Estás seguro de que quieres eliminar esta sesión y su video?');">
+              <button type="submit" style="background:#dc3545;color:white;padding:8px 15px;border-radius:5px;border:none;cursor:pointer">🗑️ Eliminar Sesión</button>
+            </form>
+          </div>
+        </div>
 
-                {# Corrected fields for Da Vinci Model feedback #}
-                {% if row[9].gpt_detailed_feedback.Diagnostico is defined %}
-                  <p><strong>Diagnóstico:</strong> {{ row[9].gpt_detailed_feedback.Diagnostico }}</p>
-                {% endif %}
-                {% if row[9].gpt_detailed_feedback.Argumentacion is defined %}
-                  <p><strong>Argumentación:</strong> {{ row[9].gpt_detailed_feedback.Argumentacion }}</p>
-                {% endif %}
-                {% if row[9].gpt_detailed_feedback.Validacion is defined %}
-                  <p><strong>Validación:</strong> {{ row[9].gpt_detailed_feedback.Validacion }}</p>
-                {% endif %}
-                {% if row[9].gpt_detailed_feedback.Cierre is defined %}
-                  <p><strong>Cierre:</strong> {{ row[9].gpt_detailed_feedback.Cierre }}</p>
-                {% endif %}
+        <!-- VIDEO -->
+        <div>
+        {% if row[6] and row[6] not in ["Video_Not_Available_Error","Video_Processing_Failed","Video_Missing_Error"] %}
+          <video controls><source src="{{ row[6] }}" type="video/mp4">Tu navegador no soporta video.</video>
+        {% else %}
+          <p style="color:gray;text-align:center">⏳ Esta sesión aún se está procesando o no tiene video.</p>
+        {% endif %}
+        </div>
+      </div>
+    {% endfor %}
 
+    <!-- ===== RESUMEN DE USO ===== -->
+    <h2 class="section-title">📈 Resumen de Tiempo por Usuario</h2>
+    <div class="summary-row">
+      <table>
+        <tr><th>Nombre</th><th>Email</th><th>Minutos usados</th><th>Resumen ejecutivo</th></tr>
+        {% for summary in usage_summaries %}
+          <tr>
+            <td>{{ summary.name }}</td>
+            <td>{{ summary.email }}</td>
+            <td>{{ summary.minutes }}</td>
+            <td>{{ summary.summary }}</td>
+          </tr>
+        {% endfor %}
+      </table>
 
-                {# Corrected fields for other detailed feedback sections #}
-                {% if row[9].gpt_detailed_feedback.Prioridad_en_uso_del_tiempo is defined %}
-                  <p><strong>Prioridad en uso del tiempo:</strong> {{ row[9].gpt_detailed_feedback.Prioridad_en_uso_del_tiempo }}</p>
-                {% endif %}
-                {% if row[9].gpt_detailed_feedback.Adaptacion_al_estilo_del_medico is defined %}
-                  <p><strong>Adaptación al estilo del médico:</strong>
-                    {% if row[9].gpt_detailed_feedback.Adaptacion_al_estilo_del_medico.comentarios is defined %}
-                        {{ row[9].gpt_detailed_feedback.Adaptacion_al_estilo_del_medico.comentarios }}
-                    {% else %}
-                        N/A
-                    {% endif %}
-                  </p>
-                {% endif %}
-                {% if row[9].gpt_detailed_feedback.Control_de_la_conversacion is defined %}
-                  <p><strong>Control de la conversación:</strong> {{ row[9].gpt_detailed_feedback.Control_de_la_conversacion }}</p>
-                {% endif %}
-                {% if row[9].gpt_detailed_feedback.Manejo_de_preguntas_criticas_del_medico is defined %}
-                  <p><strong>Manejo de preguntas críticas del médico:</strong> {{ row[9].gpt_detailed_feedback.Manejo_de_preguntas_criticas_del_medico }}</p>
-                {% endif %}
-                {% if row[9].gpt_detailed_feedback.Manejo_de_objeciones is defined %}
-                  <p><strong>Manejo de objeciones:</strong> {{ row[9].gpt_detailed_feedback.Manejo_de_objeciones }}</p>
-                {% endif %}
-                {% if row[9].gpt_detailed_feedback.Escucha_activa is defined %}
-                  <p><strong>Escucha activa:</strong> {{ row[9].gpt_detailed_feedback.Escucha_activa }}</p>
-                {% endif %}
+      <h3 style="margin-top:20px">Tiempo Total Usado: {{ total_minutes }} / 1050 min</h3>
+      <div class="progress-bar">
+        <div class="progress-fill" style="width:{{ (total_minutes / 1050) * 100 }}%">
+          <span>{{ (total_minutes / 1050) * 100 | round(1) }}%</span>
+        </div>
+      </div>
+    </div>
 
-                {% if row[9].gpt_detailed_feedback.Areas_de_mejora %}
-                  <p><strong>Áreas de Mejora Específicas (Sugerencias de la IA para Coaching):</strong></p>
-                  <ul>
-                    {% for area in row[9].gpt_detailed_feedback.Areas_de_mejora %}
-                      <li>{{ area }}</li>
-                    {% endfor %}
-                  </ul>
-                {% endif %}
+    <!-- ===== GESTIÓN DE USUARIOS ===== -->
+    <h2 class="section-title">🔐 Gestión de Usuarios</h2>
+    <div class="users-section">
+      <h3>Crear nuevo usuario (si no existe) / Ingresar a Dashboard (si ya está creado)</h3>
+      <form action="/dashboard" method="POST">
+        <label for="new_user_name">Nombre:</label>
+        <input type="text" id="new_user_name" name="name" placeholder="Nombre" required>
 
-              </div>
-            {% else %}
-              <p>No hay feedback detallado de la IA disponible para esta sesión.</p>
-            {% endif %}
+        <label for="new_user_email">Correo electrónico:</label>
+        <input type="email" id="new_user_email" name="email" placeholder="Correo electrónico" required>
 
-          {% endif %}
-          <div style="margin-top: 20px; text-align: right;">
-        <form action="/admin/delete_session/{{ row[0] }}" method="POST" onsubmit="return confirm('¿Estás seguro de que quieres eliminar esta sesión y su video?');">
-          <button type="submit" style="background-color: #dc3545; color: white; padding: 8px 15px; border-radius: 5px; border: none; cursor: pointer;">
-            🗑️ Eliminar Sesión
-          </button>
-        </form>
-        </div>
-      </div>
-    {% endfor %}
+        <label for="new_user_token">Token:</label>
+        <input type="text" id="new_user_token" name="token" placeholder="Token" required>
 
+        <button type="submit">Ingresar a Dashboard</button>
+      </form>
 
-    <h2 class="section-title">📈 Resumen de Tiempo por Usuario</h2>
-    <div class="summary-row">
-      <table>
-        <tr><th>Nombre</th><th>Email</th><th>Minutos usados</th><th>Resumen ejecutivo</th></tr>
-        {% for summary in usage_summaries %}
-        <tr>
-          <td>{{ summary.name }}</td>
-          <td>{{ summary.email }}</td>
-          <td>{{ summary.minutes }}</td>
-          <td>{{ summary.summary }}</td>
-        </tr>
-        {% endfor %}
-      </table>
+      <table>
+        <tr><th>Nombre</th><th>Email</th><th>Token</th><th>Rango de Fechas</th><th>Activo</th><th>Acciones</th></tr>
+        {% for user in users %}
+          <tr>
+            <td>{{ user[1] }}</td>
+            <td>{{ user[2] }}</td>
+            <td>{{ user[6] }}</td>
+            <td>{{ user[3] }} - {{ user[4] }}</td>
+            <td>{{ 'Sí' if user[5] else 'No' }}</td>
+            <td>
+              <form class="user-management-actions" action="/admin" method="POST">
+                <input type="hidden" name="user_id" value="{{ user[0] }}">
+                <button type="submit" name="action" value="toggle">{{ 'Desactivar' if user[5] else 'Activar' }}</button>
+                <button type="submit" name="action" value="regen_token">Nuevo Token</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+      </table>
+    </div>
+  </div>
 
-      <h3>Tiempo Total Usado: {{ total_minutes }} / 1050 minutos</h3>
-      <div class="progress-bar">
-        <div class="progress-fill" style="width: {{ (total_minutes / 1050) * 100 }}%">
-            <span>{{ (total_minutes / 1050) * 100 | round(1) }}%</span>
-        </div>
-      </div>
-    </div>
-
-    <h2 class="section-title">🔐 Gestión de Usuarios</h2>
-    <div class="users-section">
-      <h3>Crear nuevo usuario (si no existe) / Ingresar a Dashboard (si ya está creado)</h3>
-      <form action="/dashboard" method="POST">
-        <label for="new_user_name">Nombre:</label>
-        <input type="text" id="new_user_name" name="name" placeholder="Nombre" required>
-
-        <label for="new_user_email">Correo electrónico:</label>
-        <input type="email" id="new_user_email" name="email" placeholder="Correo electrónico" required>
-
-        <label for="new_user_token">Token:</label>
-        <input type="text" id="new_user_token" name="token" placeholder="Token" required>
-        
-        <button type="submit">Ingresar a Dashboard</button>
-      </form>
-
-      <table>
-        <tr>
-          <th>Nombre</th><th>Email</th><th>Token</th><th>Rango de Fechas</th><th>Activo</th><th>Acciones</th>
-        </tr>
-        {% for user in users %}
-        <tr>
-          <td>{{ user[1] }}</td>
-          <td>{{ user[2] }}</td>
-          <td>{{ user[6] }}</td>
-          <td>{{ user[3] }} - {{ user[4] }}</td>
-          <td>{{ "Sí" if user[5] else "No" }}</td>
-          <td>
-            <form class="user-management-actions" action="/admin" method="POST">
-              <input type="hidden" name="user_id" value="{{ user[0] }}">
-              <button type="submit" name="action" value="toggle">
-                {{ "Desactivar" if user[5] else "Activar" }}
-              </button>
-              <button type="submit" name="action" value="regen_token">
-                Nuevo Token
-              </button>
-            </form>
-          </td>
-        </tr>
-        {% endfor %}
-      </table>
-    </div>
-  <footer>
-    <p>Desarrollado por <a href="https://www.teams.com.mx" target="_blank">Teams</a> &copy; 2025</p>
-  </footer>
+  <!-- ===== FOOTER ===== -->
+  <footer>
+    <p>Desarrollado por <a href="https://www.teams.com.mx" target="_blank">Teams</a> © 2025</p>
+  </footer>
 </body>
 </html>
