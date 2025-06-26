@@ -138,7 +138,7 @@ function InteractiveSessionContent() {
       }
     };
 
-    recorder.onerror = (event) => {
+    recorder.onerror = (event: MediaRecorderErrorEvent) => { // <-- Add MediaRecorderErrorEvent type
         console.error("🎥 MediaRecorder ERROR:", event.error);
     };
 
