@@ -598,7 +598,7 @@ function InteractiveSessionContent() {
                   ) : (
                     !showAutoplayBlockedMessage && (
                         sessionState === StreamingAvatarSessionState.INACTIVE && (
-                            <AvatarConfig config={config} onConfigChange={setConfig} readOnly />
+                            <AvatarConfig config={config} onConfigChange={setConfig} />
                         )
                     )
                   )}
