@@ -99,7 +99,6 @@ app = Flask(
     static_folder=os.path.join(BASE_DIR, 'static')
 )
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
-
 print(f"DEBUG_FRONTEND_URL = {FRONTEND_URL}")
 
 CORS(
@@ -531,6 +530,9 @@ from uuid import uuid4   # arriba del archivo
 
 @app.route("/start-session", methods=["POST"])
 def start_session():
+        redirect_url = f"{FRONTEND_URL}/dashboard"
+        print(f"DEBUG_REDIRECT -> {redirect_url}")   #  <<–– trazador
+        return redirect(redirect_url, code=302)
     name     = request.form.get("name")
     email    = request.form.get("email")
     scenario = request.form.get("scenario")
