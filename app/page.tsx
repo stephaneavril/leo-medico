@@ -48,7 +48,25 @@ function InteractiveSessionContent() {
   const scenario = searchParams.get('scenario');
   const userToken = searchParams.get('token');
 
-  const { initAvatar, startAvatar, stopAvatar, sessionState, stream } = useStreamingAvatarSession();
+const {
+   initAvatar,
+    startAvatar,
+    stopAvatar,
+    sessionState,
+    stream,
+    /* NUEVO ↓ */
+    messages,
+    handleUserTalkingMessage,
+    handleStreamingTalkingMessage,
+  } = useStreamingAvatarSession();
+
+   const recordedChunks = useRef<Blob[]>([]);
+  /* NUEVO ↓ para que compile messagesRef */
+  const messagesRef = useRef<any[]>([]);
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
   const { startVoiceChat, isVoiceChatActive } = useVoiceChat();
 
 
@@ -60,7 +78,6 @@ function InteractiveSessionContent() {
 
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const recordedChunks = useRef<Blob[]>([]);
 
   const userCameraRef = useRef<HTMLVideoElement>(null);
   const mediaStreamRef = useRef<HTMLVideoElement>(null);
@@ -227,7 +244,7 @@ function InteractiveSessionContent() {
       if (sessionLogRes.ok) {
         const sessionLogData = await sessionLogRes.json();
         console.log("✅ Flask /log_full_session success. Response:", sessionLogData);
-        await updateSimulatedProgress("Análisis en curso...", 90);
+        //await updateSimulatedProgress("Análisis en curso...", 90);
       } else {
         const errorText = await sessionLogRes.text();
         console.error("❌ Error al registrar sesión a Flask /log_full_session:", sessionLogRes.status, errorText);
@@ -238,7 +255,7 @@ function InteractiveSessionContent() {
       console.error("❌ Error general en la solicitud de subida o registro:", err);
       alert("❌ Error de red durante el proceso de finalización de la sesión.");
     } finally {
-      await updateSimulatedProgress("Redirigiendo al Dashboard...", 100);
+      //await updateSimulatedProgress("Redirigiendo al Dashboard...", 100);
       document.getElementById("simple-processing-overlay")?.remove();
       router.push('/dashboard');
     }
