@@ -530,43 +530,50 @@ from uuid import uuid4   # arriba del archivo
 
 @app.route("/start-session", methods=["POST"])
 def start_session():
-        redirect_url = f"{FRONTEND_URL}/dashboard"
-        print(f"DEBUG_REDIRECT -> {redirect_url}")   #  <<–– trazador
-        return redirect(redirect_url, code=302)
+    # 1. Leer campos del formulario
     name     = request.form.get("name")
     email    = request.form.get("email")
     scenario = request.form.get("scenario")
     if not all([name, email, scenario]):
         return "Faltan datos.", 400
 
+    # 2. Comprobar vigencia de usuario
     today = date.today().isoformat()
     conn  = get_db_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute("""SELECT active,start_date,end_date,token
-                           FROM users WHERE email=%s""", (email,))
+            cur.execute("""
+                SELECT active, start_date, end_date, token 
+                FROM users WHERE email = %s
+            """, (email,))
             row = cur.fetchone()
-
-        if not row:                       return "Usuario no registrado.", 403
-        active, start, end, db_token = row
-        if not active:                    return "Usuario inactivo.", 403
-        if not (start <= today <= end):   return "Fuera de rango.", 403
-
-        token = db_token
     finally:
         conn.close()
 
+    if not row:
+        return "Usuario no registrado.", 403
+
+    active, start, end, db_token = row
+    if not active:
+        return "Usuario inactivo.", 403
+    if not (start <= today <= end):
+        return "Fuera de rango.", 403
+
+    token = db_token
+
+    # 3. Preparar cookies (ya estamos en HTTPS en Render)
     cookie_opts = dict(
-        max_age  = 60*60*24*30,   # 30 días
+        max_age  = 60 * 60 * 24 * 30,  # 30 días
         path     = "/",
         samesite = "Lax",
-        secure   = False          # pon True cuando tengas HTTPS
+        secure   = True                # ✅ en Render usa HTTPS
     )
 
+    # 4. Redirigir al dashboard en el frontend
     redirect_url = f"{FRONTEND_URL}/dashboard"
+    print(f"DEBUG_REDIRECT -> {redirect_url}")     # trazador
+
     resp = make_response(redirect(redirect_url, code=302))
-
-
     for k, v in {
         "user_name":     name,
         "user_email":    email,
@@ -575,8 +582,8 @@ def start_session():
     }.items():
         resp.set_cookie(k, v, **cookie_opts)
 
-    print(f"[DEBUG] cookie token = {token}")
     return resp
+
 
 @app.route("/validate_user", methods=["POST"])
 def validate_user_endpoint():
