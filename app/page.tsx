@@ -365,19 +365,19 @@ const {
       // Passed 'event' as the parameter, and access 'event.message'
       avatar.on(StreamingEvents.USER_END_MESSAGE, (event) => { // Changed (message) to (event)
         console.log("HeyGen: USER_END_MESSAGE event received. Message:", event.message); // Log event.message
-        handleUserTalkingMessage({ detail: { message: event.message || "" } }); // Pass as { detail: { message: string } }
+        handleUserTalkingMessage({ detail: event });
       });
       avatar.on(StreamingEvents.USER_TALKING_MESSAGE, (event) => { // Changed (message) to (event)
         console.log("HeyGen: USER_TALKING_MESSAGE event received. Message:", event.message); // Log event.message
-        handleUserTalkingMessage({ detail: { message: event.message || "" } }); // Pass as { detail: { message: string } }
+        handleUserTalkingMessage({ detail: event });
       });
       avatar.on(StreamingEvents.AVATAR_TALKING_MESSAGE, (event) => { // Changed (message) to (event)
         console.log("HeyGen: AVATAR_TALKING_MESSAGE event received. Message:", event.message); // Log event.message
-        handleStreamingTalkingMessage({ detail: { message: event.message || "" } }); // Pass as { detail: { message: string } }
+        handleUserTalkingMessage({ detail: event });
       });
       avatar.on(StreamingEvents.AVATAR_END_MESSAGE, (event) => { // Changed (message) to (event)
         console.log("HeyGen: AVATAR_END_MESSAGE event received. Message:", event.message); // Log event.message
-        handleStreamingTalkingMessage({ detail: { message: event.message || "" } }); // Pass as { detail: { message: string } }
+        handleUserTalkingMessage({ detail: event });
       });
 
       avatar.on(
