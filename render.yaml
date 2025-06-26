@@ -32,3 +32,5 @@ services:
     envVars:
       - key: NEXT_PUBLIC_FLASK_API_URL
         value: "https://leo-api-ryzd.onrender.com"
+      - key: NODE_ENV 
+        value: "production" 
