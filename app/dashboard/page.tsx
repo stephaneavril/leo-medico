@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Cookies from 'js-cookie';
-import { apiFetch } from '../../lib/apiFetch';
+import { apiFetch } from '../../../lib/apiFetch';
 import Link from 'next/link';
 
 export const dynamic = 'force-dynamic';
