@@ -659,7 +659,6 @@ def dashboard_data():
     """
     conn = None
     try:
-        data = request.get_json(force=True)
         name = data.get("name")
         email = data.get("email")
         token = data.get("token")

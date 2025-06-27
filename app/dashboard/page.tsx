@@ -3,7 +3,6 @@
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Cookies from 'js-cookie';
-import { apiFetch } from '../lib/apiFetch';
 import Link from 'next/link';
 
 export const dynamic = 'force-dynamic';
@@ -53,9 +52,14 @@ export default function DashboardPage() {
 
     (async () => {
       try {
-        const res = await apiFetch('/dashboard_data');
-        if (!res.ok) throw new Error(await res.text());
-        const data = await res.json();
+        const res = await fetch('/api/dashboard'); 
+
+        if (!res.ok) 
+          {
+           const errorData = await res.json();
+           throw new Error(errorData.error || 'Respuesta no fue OK');
+        }
+         const data = await res.json();
         const sessions: SessionRecord[] = Array.isArray(data.sessions) ? data.sessions : [];
         const used: number = typeof data.used_seconds === 'number' ? data.used_seconds : 0;
 
