@@ -303,8 +303,7 @@ function InteractiveSessionContent() {
       alert("❌ Error de red durante el proceso de finalización de la sesión.");
     } finally {
       document.getElementById("simple-processing-overlay")?.remove();
-      router.push('/dashboard');
-    }
+      router.push(`${process.env.NEXT_PUBLIC_FRONTEND_BASE}/dashboard`);
   };
 
   useEffect(() => {

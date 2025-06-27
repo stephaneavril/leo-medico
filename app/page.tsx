@@ -257,7 +257,7 @@ const {
     } finally {
       //await updateSimulatedProgress("Redirigiendo al Dashboard...", 100);
       document.getElementById("simple-processing-overlay")?.remove();
-      router.push('/dashboard');
+      router.push(`${process.env.NEXT_PUBLIC_FRONTEND_BASE}/dashboard`);
     }
   });
 
