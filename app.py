@@ -102,12 +102,11 @@ FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
 print(f"DEBUG_FRONTEND_URL = {FRONTEND_URL}")
 
 CORS(
-    app,
-    origins=["https://leo-api-ryzd.onrender.com"],
-    supports_credentials=True,      # si algún día vuelves a usar cookies
-    methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization"],
-    expose_headers=["Content-Disposition"]   # por si devuelves ficheros
+  app,
+  origins=["https://leo-api-ryzd.onrender.com"],
+  methods=["GET","POST","OPTIONS"],
+  allow_headers=["Content-Type","Authorization"],
+  supports_credentials=True
 )
 
 @app.before_request
@@ -564,11 +563,11 @@ def start_session():
 
     # 3. Crear JWT válido 2 min
     payload = {
-        "name":     name,
-        "email":    email,
-        "scenario": scenario,
-        "iat": datetime.datetime.utcnow(),
-        "exp": datetime.datetime.utcnow() + datetime.timedelta(minutes=2),
+    "name":     name,
+    "email":    email,
+    "scenario": scenario,
+    "iat": datetime.datetime.utcnow(),
+    "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=1),  # ⬅️ aquí
     }
     token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG)
 
@@ -628,10 +627,32 @@ SENTINELS = [
   'Video_Processing_Failed',
   'Video_Missing_Error',
 ]
+from functools import wraps
+from flask import request, jsonify
 
-@app.route("/dashboard_data", methods=["POST"])
-# @cross_origin() # Mantenlo si tienes problemas de CORS
+def jwt_required(f):
+    @wraps(f)
+    def _wrap(*args, **kwargs):
+        auth = request.headers.get("Authorization", "")
+        token = auth.split("Bearer ", 1)[1] if auth.startswith("Bearer ") else None
+
+        if not token:
+            return jsonify(error="token faltante"), 401
+
+        try:
+            payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
+            request.jwt = payload
+        except Exception:
+            return jsonify(error="token inválido o usuario no autorizado"), 401
+
+        return f(*args, **kwargs)
+    return _wrap
+
+@app.get("/dashboard_data")
+@cross_origin()
+@jwt_required
 def dashboard_data():
+    email = request.jwt["email"]
     """
     Espera JSON con:  { "name": "...", "email": "..." , "token": "..." }
     Devuelve lista de sesiones grabadas para el usuario autenticado.
@@ -777,7 +798,10 @@ def serve_video(filename):
     return redirect(presigned, code=302)
 
 @app.route('/upload_video', methods=['POST'])
+@cross_origin()
+@jwt_required
 def upload_video():
+    email = request.jwt["email"]
     video_file = request.files.get('video')
     name = request.form.get('name')
     email = request.form.get('email')

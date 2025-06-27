@@ -4,7 +4,9 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Cookies from 'js-cookie';
+import { apiFetch } from '@/lib/apiFetch'
 import Link from 'next/link';
+
 export const dynamic = 'force-dynamic';
 
 interface SessionRecord {
@@ -26,96 +28,71 @@ const SENTINELS = [
   'Video_Missing_Error',
 ];
 
-export default function DashboardPage() {
+xport default function DashboardPage() {
   const [records, setRecords] = useState<SessionRecord[]>([]);
   const [usedSeconds, setUsedSeconds] = useState<number>(0);
   const [loading, setLoading] = useState<boolean>(true);
-  const [userName, setUserName] = useState<string | null>(null);
-
+  const [userName, setUserName] = useState<string>('');
   const router = useRouter();
 
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
-    return `${mins}m ${secs.toString().padStart(2, '0')}s`;
+    return `${mins}m ${String(secs).padStart(2, '0')}s`;
   };
 
   useEffect(() => {
-    const nameFromCookie = Cookies.get('user_name');
-    const emailFromCookie = Cookies.get('user_email');
-    const tokenFromCookie = Cookies.get('user_token');
+    const name = Cookies.get('user_name');
+    const email = Cookies.get('user_email');
+    const token = Cookies.get('user_token');
 
-    if (!nameFromCookie || !emailFromCookie || !tokenFromCookie) {
+    if (!name || !email || !token) {
       router.push('/');
       return;
     }
-
-    setUserName(nameFromCookie);
+    setUserName(name);
 
     (async () => {
       try {
-        const apiBase = (process.env.NEXT_PUBLIC_FLASK_API_URL || '').trim();
-        console.log('[Dashboard] API base:', apiBase);
-
-        const res = await fetch(`${apiBase}/dashboard_data`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: nameFromCookie, email: emailFromCookie, token: tokenFromCookie }),
-        });
-
-        if (!res.ok) {
-          throw new Error(await res.text());
-        }
-
+        const res = await apiFetch('/dashboard_data');
+        if (!res.ok) throw new Error(await res.text());
         const data = await res.json();
         const sessions: SessionRecord[] = Array.isArray(data.sessions) ? data.sessions : [];
-        const used = typeof data.used_seconds === 'number' ? data.used_seconds : 0;
+        const used: number = typeof data.used_seconds === 'number' ? data.used_seconds : 0;
 
-        const mappedSessions = sessions.map((s) => ({
+        const mapped = sessions.map(s => ({
           ...s,
-          // Flask ya debería enviar `video_s3` como la URL prefirmada
-          // Si Flask envía la clave, entonces:
-          // video_s3: s.video_s3 && !SENTINELS.includes(s.video_s3) ? `${apiBase}/video/${s.video_s3}` : null,
-          // Si Flask ya envía la URL completa, simplemente la usamos
-          video_s3: s.video_s3 && !SENTINELS.includes(s.video_s3) ? s.video_s3 : null,
-
-          // Asegurar valores por defecto y consistencia de nombres
           scenario: s.scenario || 'N/A',
-          user_transcript: s.user_transcript || 'No hay transcripción del usuario.',
-          avatar_transcript: s.avatar_transcript || 'No hay transcripción del avatar.',
-          coach_advice: s.coach_advice || 'Análisis IA pendiente.',
-          tip: s.tip || 'Consejo pendiente.',
-          visual_feedback: s.visual_feedback || 'Análisis visual pendiente.',
-          created_at: s.created_at ? new Date(s.created_at).toLocaleString() : 'Fecha no disponible', // Formatear fecha
+          user_transcript: s.user_transcript || '',
+          avatar_transcript: s.avatar_transcript || '',
+          coach_advice: s.coach_advice || '',
+          tip: s.tip || '',
+          visual_feedback: s.visual_feedback || '',
+          video_s3: s.video_s3 && !SENTINELS.includes(s.video_s3) ? s.video_s3 : null,
+          created_at: s.created_at ? new Date(s.created_at).toLocaleString() : '',
           duration: s.duration || 0,
         }));
 
-        setRecords(mappedSessions);
+        setRecords(mapped);
         setUsedSeconds(used);
-
-        console.log("Dashboard Data Loaded:");
-        console.log("Mapped Sessions:", mappedSessions);
-        console.log("Used Seconds:", used);
-
-      } catch (err: any) {
+      } catch (err) {
         console.error('[Dashboard] fetch error', err);
-        alert(`Error al cargar el dashboard: ${err.message || err}`);
+        alert(`Error cargando dashboard: ${err}`);
       } finally {
         setLoading(false);
       }
     })();
   }, [router]);
 
-  const maxSeconds = 1800; // 30 minutos
-
   if (loading) {
     return (
       <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: '#0c0e2c', color: '#e6e8ef' }}>
         Cargando...
-      </div>
-    );
+      </div>  
+      );
   }
 
+  const maxSeconds = 1800; // 30 minutos
   const defaultScenario = "Entrevista con el médico"; // Escenario por defecto para el botón
 
   return (
