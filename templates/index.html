@@ -1,65 +1,36 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8">
+  <meta charset="UTF-8" />
   <title>Entrenamiento Leo - Ingreso</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
-    body {
-      background-color: #0c0e2c;
-      color: white;
-      font-family: 'Segoe UI', sans-serif;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      height: 100vh;
-    }
-
-    form {
-      background-color: #1b1e3d;
-      padding: 30px;
-      border-radius: 12px;
-      box-shadow: 0 0 20px rgba(0, 191, 255, 0.3);
-      text-align: center;
-    }
-
-    h1 {
-      margin-bottom: 20px;
-      color: #00bfff;
-    }
-
-    input {
-      padding: 12px;
-      margin: 10px 0;
-      width: 260px;
-      border: none;
-      border-radius: 6px;
-      font-size: 16px;
-    }
-
-    button {
-      padding: 10px 30px;
-      background-color: #00bfff;
-      color: black;
-      border: none;
-      border-radius: 5px;
-      font-weight: bold;
-      cursor: pointer;
-      font-size: 16px;
-    }
+    body{background:#0c0e2c;color:#fff;font-family:"Segoe UI",sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh}
+    form{background:#1b1e3d;padding:30px;border-radius:12px;box-shadow:0 0 20px rgba(0,191,255,.3);text-align:center}
+    h1{margin-bottom:20px;color:#00bfff}
+    input{padding:12px;margin:10px 0;width:260px;border:none;border-radius:6px;font-size:16px}
+    button{padding:10px 30px;background:#00bfff;color:#000;border:none;border-radius:5px;font-weight:bold;cursor:pointer;font-size:16px}
   </style>
 </head>
 <body>
 
-  <form action="/start-session" method="POST"></form><h1>🧠 Entrenamiento Virtual con Leo</h1>
-    <input type="text" name="name" placeholder="Tu nombre" required><br>
-    <input type="email" name="email" placeholder="Correo electrónico" required><br>
-    <input type="text" name="token" placeholder="Tu código de acceso" required><br>
-    <input type="hidden" name="scenario" value="Entrevista con médico"> <button type="submit">Comenzar</button>
+  <!-- 1️⃣  El FORM se abre y se cierra después de los controles -->
+  <form action="/start-session" method="POST">
+    <h1>🧠 Entrenamiento Virtual con Leo</h1>
+
+    <input type="text"  name="name"     placeholder="Tu nombre"            required />
+    <input type="email" name="email"    placeholder="Correo electrónico"   required />
+    <input type="text"  name="scenario" placeholder="Tu código de acceso"  required />
+
+    <!-- Puedes ocultar el escenario si lo prefieres -->
+    <!-- <input type="hidden" name="scenario" value="Entrevista con médico" /> -->
+
+    <button type="submit">Comenzar</button>
   </form>
-<footer>
+
+  <footer>
     <p>Desarrollado por <a href="https://www.teams.com.mx" target="_blank">Teams</a> &copy; 2025</p>
   </footer>
+
 </body>
 </html>
