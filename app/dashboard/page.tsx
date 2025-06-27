@@ -52,7 +52,7 @@ async function getDashboardData(jwt: string) {
 
 // Este es el componente principal de la página, es un Server Component por defecto
 export default async function DashboardPage() {
-  const jwt = cookies().get('jwt')?.value;
+    const jwt = (await cookies()).get('jwt')?.value;
 
   // Si no hay token, lo redirigimos a la página de inicio
   if (!jwt) {
