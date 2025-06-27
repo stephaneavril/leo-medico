@@ -565,9 +565,10 @@ def start_session():
     cookie_opts = dict(
         max_age  = 60 * 60 * 24 * 30,  # 30 días
         path     = "/",
+        domain   = ".onrender.com",
         samesite = "Lax",
         secure   = True                # ✅ en Render usa HTTPS
-        domain   = ".onrender.com"
+       
     )
 
     # 4. Redirigir al dashboard en el frontend
