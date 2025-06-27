@@ -12,3 +12,4 @@ mediapipe
 celery[redis] 
 boto3
 psycopg2-binary
+PyJWT==2.9.0
