@@ -28,7 +28,7 @@ const SENTINELS = [
   'Video_Missing_Error',
 ];
 
-xport default function DashboardPage() {
+export default function DashboardPage() {
   const [records, setRecords] = useState<SessionRecord[]>([]);
   const [usedSeconds, setUsedSeconds] = useState<number>(0);
   const [loading, setLoading] = useState<boolean>(true);
