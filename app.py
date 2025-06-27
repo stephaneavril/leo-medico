@@ -527,23 +527,28 @@ def admin_panel():
 
 # --- app.py ----------------------------------------------------------
 from uuid import uuid4   # arriba del archivo
+import jwt, datetime, os
+
+JWT_SECRET = os.environ["JWT_SECRET"]      # Añádelo en Render
+JWT_ALG    = "HS256"
+FRONTEND_URL = "https://leo-api-ryzd.onrender.com"   # o desde env
 
 @app.route("/start-session", methods=["POST"])
 def start_session():
-    # 1. Leer campos del formulario
+    # 1. Leer formulario
     name     = request.form.get("name")
     email    = request.form.get("email")
     scenario = request.form.get("scenario")
     if not all([name, email, scenario]):
         return "Faltan datos.", 400
 
-    # 2. Comprobar vigencia de usuario
+    # 2. Validar usuario (tu misma lógica)
     today = date.today().isoformat()
     conn  = get_db_connection()
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT active, start_date, end_date, token 
+                SELECT active, start_date, end_date
                 FROM users WHERE email = %s
             """, (email,))
             row = cur.fetchone()
@@ -552,39 +557,24 @@ def start_session():
 
     if not row:
         return "Usuario no registrado.", 403
+    active, start, end = row
+    if not active or not (start <= today <= end):
+        return "Sin vigencia.", 403
 
-    active, start, end, db_token = row
-    if not active:
-        return "Usuario inactivo.", 403
-    if not (start <= today <= end):
-        return "Fuera de rango.", 403
+    # 3. Crear JWT válido 2 min
+    payload = {
+        "name":     name,
+        "email":    email,
+        "scenario": scenario,
+        "iat": datetime.datetime.utcnow(),
+        "exp": datetime.datetime.utcnow() + datetime.timedelta(minutes=2),
+    }
+    token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG)
 
-    token = db_token
-
-    # 3. Preparar cookies (ya estamos en HTTPS en Render)
-    cookie_opts = dict(
-        max_age  = 60 * 60 * 24 * 30,  # 30 días
-        path     = "/",
-        domain   = ".onrender.com",
-        samesite = "None",
-        secure   = True                # ✅ en Render usa HTTPS
-       
-    )
-
-    # 4. Redirigir al dashboard en el frontend
-    redirect_url = f"{FRONTEND_URL}/dashboard"
-    print(f"DEBUG_REDIRECT -> {redirect_url}")     # trazador
-
-    resp = make_response(redirect(redirect_url, code=302))
-    for k, v in {
-        "user_name":     name,
-        "user_email":    email,
-        "user_token":    token,
-        "user_scenario": scenario,
-    }.items():
-        resp.set_cookie(k, v, **cookie_opts)
-
-    return resp
+    # 4. Redirigir al Frontend
+    url = f"{FRONTEND_URL}/dashboard?auth={token}"
+    print("DEBUG_REDIRECT ->", url)
+    return redirect(url, code=302)
 
 
 @app.route("/validate_user", methods=["POST"])

@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Cookies from 'js-cookie';
 import Link from 'next/link';
+export const dynamic = 'force-dynamic';
 
 interface SessionRecord {
   id?: number;
