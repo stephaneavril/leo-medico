@@ -567,6 +567,7 @@ def start_session():
         path     = "/",
         samesite = "Lax",
         secure   = True                # ✅ en Render usa HTTPS
+        domain   = ".onrender.com"
     )
 
     # 4. Redirigir al dashboard en el frontend
