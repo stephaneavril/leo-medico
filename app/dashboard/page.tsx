@@ -1,10 +1,9 @@
-// File: app/dashboard/page.tsx
 'use client';
 
-import { useEffect, useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Cookies from 'js-cookie';
-import { apiFetch } from '@/lib/apiFetch'
+import { apiFetch } from '../../lib/apiFetch';
 import Link from 'next/link';
 
 export const dynamic = 'force-dynamic';
@@ -86,10 +85,10 @@ export default function DashboardPage() {
 
   if (loading) {
     return (
-      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: '#0c0e2c', color: '#e6e8ef' }}>
+      <div className="loading-container">
         Cargando...
-      </div>  
-      );
+      </div>
+    );
   }
 
   const maxSeconds = 1800; // 30 minutos
