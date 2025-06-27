@@ -103,10 +103,11 @@ print(f"DEBUG_FRONTEND_URL = {FRONTEND_URL}")
 
 CORS(
     app,
-    origins=[
-        "https://leo-api.onrender.com",  # dominio del frontend
-    ],
-    supports_credentials=True           # si usas cookies de sesión
+    origins=["https://leo-api-ryzd.onrender.com"],
+    supports_credentials=True,      # si algún día vuelves a usar cookies
+    methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
+    expose_headers=["Content-Disposition"]   # por si devuelves ficheros
 )
 
 @app.before_request
