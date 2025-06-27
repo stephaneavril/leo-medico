@@ -566,7 +566,7 @@ def start_session():
         max_age  = 60 * 60 * 24 * 30,  # 30 días
         path     = "/",
         domain   = ".onrender.com",
-        samesite = "Lax",
+        samesite = "None",
         secure   = True                # ✅ en Render usa HTTPS
        
     )
