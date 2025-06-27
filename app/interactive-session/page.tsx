@@ -304,7 +304,8 @@ function InteractiveSessionContent() {
     } finally {
       document.getElementById("simple-processing-overlay")?.remove();
       router.push(`${process.env.NEXT_PUBLIC_FRONTEND_BASE}/dashboard`);
-  };
+    } 
+    };
 
   useEffect(() => {
     if (!isBrowser || !navigator.mediaDevices?.getUserMedia) {
@@ -702,7 +703,7 @@ function InteractiveSessionContent() {
       </footer>
     </div>
   );
-}
+  }
 
 /**************************** WRAPPER PROVIDER ****************************/
 export default function InteractiveSessionWrapper() {
