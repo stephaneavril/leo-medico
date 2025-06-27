@@ -1,31 +1,43 @@
+// middleware.ts
 import { NextRequest, NextResponse } from 'next/server'
-import jwt from 'jsonwebtoken'
 
-const JWT_SECRET = process.env.JWT_SECRET!
-
-export function middleware(req: NextRequest) {
-  if (!req.nextUrl.pathname.startsWith('/dashboard')) return
-
-  const token = req.nextUrl.searchParams.get('auth')
-  if (!token) return
-
+const decodeJWT = (token: string) => {
   try {
-    const payload: any = jwt.verify(token, JWT_SECRET)
+    const base64 = token.split('.')[1]                       // sólo payload
+      .replace(/-/g, '+')
+      .replace(/_/g, '/');                                   // base64url → base64
 
-    const res = NextResponse.redirect(new URL('/dashboard', req.url))
-    const maxAge = 60 * 60 * 24 * 30
-
-    res.cookies.set('user_name',     payload.name,     { maxAge, sameSite: 'lax' })
-    res.cookies.set('user_email',    payload.email,    { maxAge, sameSite: 'lax' })
-    res.cookies.set('user_token',    token,            { maxAge, sameSite: 'lax' })
-    res.cookies.set('user_scenario', payload.scenario, { maxAge, sameSite: 'lax' })
-
-    return res
+    const json = atob(base64);                               // Edge runtime: atob
+    return JSON.parse(json) as {
+      name: string; email: string; scenario: string
+    }
   } catch {
-    return NextResponse.redirect(new URL('/', req.url))
+    return null
   }
 }
 
-export const config = {
-  matcher: ['/dashboard/:path*', '/interactive-session/:path*'],
+export function middleware(req: NextRequest) {
+  if (req.nextUrl.pathname !== '/dashboard') return
+
+  const urlToken = req.nextUrl.searchParams.get('auth')
+  const c = req.cookies
+
+  if (c.get('user_name')?.value) return      // ya teníamos cookies
+
+  if (urlToken) {
+    const data = decodeJWT(urlToken)
+    if (data) {
+      const res = NextResponse.redirect(new URL('/dashboard', req.url))
+      const opts = { path: '/', maxAge: 60 * 60 * 24 * 30 }
+
+      res.cookies.set('user_name',     data.name,     opts)
+      res.cookies.set('user_email',    data.email,    opts)
+      res.cookies.set('user_scenario', data.scenario, opts)
+      res.cookies.set('user_token',    urlToken,      opts) // opcional
+      return res
+    }
+  }
+
+  // nada válido → volver al login (backend)
+  return NextResponse.redirect('https://leo-backend-flask.onrender.com/')
 }
