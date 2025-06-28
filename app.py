@@ -4,31 +4,51 @@ from urllib.parse import urlparse
 import json
 import secrets
 from datetime import datetime, date
-from flask import Flask, request, jsonify, render_template, redirect, url_for, session, make_response, send_file # type: ignore
-from flask_cors import CORS # type: ignore
+from flask import (
+    Flask, request, jsonify, render_template,
+    redirect, url_for, session, make_response, send_file
+)
+from flask_cors import CORS
 from werkzeug.utils import secure_filename
 from dotenv import load_dotenv
 from typing import Union
-
 import openai
 import boto3
 from botocore.exceptions import ClientError
 import re
-from flask import Flask, request, jsonify, send_file, redirect  # y lo que ya tuvieras
-app = Flask(__name__)
 
+# 1) Carga variables de entorno
+load_dotenv(override=True)
+
+# 2) Carpeta temporal para procesar videos
+TEMP_PROCESSING_FOLDER = os.getenv("TEMP_PROCESSING_FOLDER", "/tmp/leo_trainer_processing")
+os.makedirs(TEMP_PROCESSING_FOLDER, exist_ok=True)
+
+# 3) Define BASE_DIR para plantillas y estáticos
+BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+
+# 4) Instancia la app UNA SOLA VEZ, con template y static
+app = Flask(
+    __name__,
+    template_folder=os.path.join(BASE_DIR, 'templates'),
+    static_folder=os.path.join(BASE_DIR, 'static'),
+)
+app.secret_key = os.getenv("FLASK_SECRET_KEY", secrets.token_hex(16))
+
+# 5) Configura CORS sólo para tu frontend de producción
 CORS(
-  app,
-  resources={r"/*": {"origins": ["http://localhost:3000", "https://leo-api-ryzd.onrender.com"]}},
-  methods=["GET", "POST", "OPTIONS"],
-  allow_headers=["Content-Type", "Authorization"],
-  supports_credentials=True
+    app,
+    resources={r"/*": {
+        "origins": [
+            os.getenv("FRONTEND_URL", "https://leo-api-ryzd.onrender.com")
+        ]
+    }},
+    methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
+    supports_credentials=True,
 )
 
-print("\U0001F680 Iniciando Leo Virtual Trainer (Modo Simple)...")
-
-# Load environment variables from .env file
-load_dotenv(override=True)
+print("🚀 Iniciando Leo Virtual Trainer (Modo Producción)…")
 
 # Debugging print for all relevant env vars
 print(f"DEBUG: OPENAI_API_KEY (first 5 chars): {os.getenv('OPENAI_API_KEY', 'N/A')[:5]}...")
@@ -98,16 +118,6 @@ def get_db_connection():
 
 TEMP_PROCESSING_FOLDER = os.getenv("TEMP_PROCESSING_FOLDER", "/tmp/leo_trainer_processing")
 os.makedirs(TEMP_PROCESSING_FOLDER, exist_ok=True)
-
-BASE_DIR = os.path.abspath(os.path.dirname(__file__))
-
-app = Flask(
-    __name__,
-    template_folder=os.path.join(BASE_DIR, 'templates'),
-    static_folder=os.path.join(BASE_DIR, 'static')
-)
-FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
-print(f"DEBUG_FRONTEND_URL = {FRONTEND_URL}")
 
 @app.before_request
 def log_request_info():
@@ -878,6 +888,3 @@ def log_full_session():
 @app.route("/healthz")
 def health_check():
     return "OK", 200
-
-if __name__ == "__main__":
-    app.run(host="localhost", port=5000, debug=True)
