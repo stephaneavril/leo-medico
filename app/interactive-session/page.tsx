@@ -147,8 +147,8 @@ const stopAndFinalizeSession = useCallback((sessionMessages: any[]) => {
 if (videoBlob.size > 0) {
   const form = new FormData();
   form.append('video', videoBlob, 'user_recording.webm');
-  const jwt = Cookies.get('jwt')!;
-
+  const jwt = sessionInfo.token;
+  
   console.log('[API] Subiendo video a:', flaskApiUrl);
   console.log('[API] JWT upload_video:', jwt);
 
