@@ -71,8 +71,8 @@ function InteractiveSessionContent() {
   const avatarVideoRef = useRef<HTMLVideoElement>(null);
   const isFinalizingRef = useRef(false);
 
-  // ========== CORRECCIÓN #1: Leer los datos de la sesión dentro de un useEffect ==========
-  // Esto soluciona el error de React #418 al asegurar que este código solo se ejecute en el navegador, evitando conflictos de renderizado.
+  // ========== CORRECCIÓN #1: LEER DATOS DE SESIÓN EN useEffect ==========
+  // Esto soluciona el "React error #418" al asegurar que el código solo se ejecute en el navegador.
   useEffect(() => {
     const name = searchParams.get('name') || Cookies.get('user_name');
     const email = searchParams.get('email') || Cookies.get('user_email');
@@ -154,8 +154,8 @@ function InteractiveSessionContent() {
           videoFormData.append('name', sessionInfo.name);
           videoFormData.append('email', sessionInfo.email);
 
-          // ========== CORRECCIÓN #2: Añadir el token JWT al subir el video ==========
-          // Esto soluciona el error 401 Unauthorized.
+          // ========== CORRECCIÓN #2: AÑADIR TOKEN JWT AL SUBIR EL VIDEO ==========
+          // Esto soluciona el error "401 Unauthorized" / "token faltante".
           const jwt = Cookies.get('jwt');
           const headers: HeadersInit = {};
           if (jwt) {
@@ -164,7 +164,7 @@ function InteractiveSessionContent() {
 
           const uploadRes = await fetch(`${flaskApiUrl}/upload_video`, {
               method: "POST",
-              headers: headers,
+              headers: headers, // Añadimos el header de autorización
               body: videoFormData,
           });
 
@@ -310,7 +310,12 @@ function InteractiveSessionContent() {
   }
 
   if (!sessionInfo) {
-    return <div className="min-h-screen flex items-center justify-center bg-zinc-900 text-white"><LoadingIcon className="w-10 h-10 animate-spin" /> <span className="ml-4">Cargando datos de sesión...</span></div>;
+    return (
+      <div className="w-screen h-screen flex flex-col items-center justify-center bg-zinc-900 text-white">
+        <LoadingIcon className="w-10 h-10 animate-spin" />
+        <p className="mt-4">Cargando datos de sesión...</p>
+      </div>
+    );
   }
 
   return (
