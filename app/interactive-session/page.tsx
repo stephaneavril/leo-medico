@@ -1,3 +1,5 @@
+// File: app/interactive-session/page.tsx (VERSIÓN COMPLETA, CORRECTA Y FINAL)
+
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
@@ -71,8 +73,8 @@ function InteractiveSessionContent() {
   const avatarVideoRef = useRef<HTMLVideoElement>(null);
   const isFinalizingRef = useRef(false);
 
-  // ========== CORRECCIÓN #1: LEER DATOS DE SESIÓN EN useEffect ==========
-  // Esto soluciona el "React error #418" al asegurar que el código solo se ejecute en el navegador.
+  // ========== CORRECCIÓN #1: LEER DATOS DE SESIÓN DENTRO DE useEffect ==========
+  // Esto soluciona el "React error #418" (error de hidratación)
   useEffect(() => {
     const name = searchParams.get('name') || Cookies.get('user_name');
     const email = searchParams.get('email') || Cookies.get('user_email');
@@ -128,10 +130,7 @@ function InteractiveSessionContent() {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
         const recorder = mediaRecorderRef.current;
         await new Promise<void>(resolve => {
-            recorder.onstop = () => {
-                console.log("🎥 MediaRecorder: onstop event fired.");
-                resolve();
-            };
+            recorder.onstop = () => resolve();
             recorder.stop();
         });
         if (recordedChunks.current.length > 0) {
@@ -154,7 +153,7 @@ function InteractiveSessionContent() {
           videoFormData.append('name', sessionInfo.name);
           videoFormData.append('email', sessionInfo.email);
 
-          // ========== CORRECCIÓN #2: AÑADIR TOKEN JWT AL SUBIR EL VIDEO ==========
+          // ========== CORRECCIÓN #2: AÑADIR EL TOKEN JWT AL SUBIR EL VIDEO ==========
           // Esto soluciona el error "401 Unauthorized" / "token faltante".
           const jwt = Cookies.get('jwt');
           const headers: HeadersInit = {};
@@ -164,7 +163,7 @@ function InteractiveSessionContent() {
 
           const uploadRes = await fetch(`${flaskApiUrl}/upload_video`, {
               method: "POST",
-              headers: headers, // Añadimos el header de autorización
+              headers: headers,
               body: videoFormData,
           });
 
@@ -311,10 +310,10 @@ function InteractiveSessionContent() {
 
   if (!sessionInfo) {
     return (
-      <div className="w-screen h-screen flex flex-col items-center justify-center bg-zinc-900 text-white">
-        <LoadingIcon className="w-10 h-10 animate-spin" />
-        <p className="mt-4">Cargando datos de sesión...</p>
-      </div>
+        <div className="w-screen h-screen flex flex-col items-center justify-center bg-zinc-900 text-white">
+            <LoadingIcon className="w-10 h-10 animate-spin" />
+            <p className="mt-4">Cargando datos de sesión...</p>
+        </div>
     );
   }
 
