@@ -119,64 +119,73 @@ function InteractiveSessionContent() {
     } catch (err) { console.error('Error al iniciar MediaRecorder:', err); }
   }, []);
   
-  const stopAndFinalizeSession = useCallback(async (sessionMessages: any[]) => {
-    if (isFinalizingRef.current || !sessionInfo) return;
-    isFinalizingRef.current = true;
-    console.log("🛑 Finalizando sesión...");
-    stopAvatar();
+const stopAndFinalizeSession = useCallback((sessionMessages: any[]) => {
+  if (isFinalizingRef.current || !sessionInfo) return;
+  isFinalizingRef.current = true;
+  console.log("🛑 Finalizando sesión…");
+  stopAvatar();
 
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
-        mediaRecorderRef.current.stop();
-    }
-    stopUserCameraRecording();
+  if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+    mediaRecorderRef.current.onstop = async () => {
+      // 1) Parar cámara y liberar recursos
+      stopUserCameraRecording();
 
-    const userTranscript = sessionMessages.filter(m => m.sender === MessageSender.CLIENT).map(m => m.content).join('\n');
-    const avatarTranscript = sessionMessages.filter(m => m.sender === MessageSender.AVATAR).map(m => m.content).join('\n');
-    const duration = 480 - recordingTimerRef.current;
-    const flaskApiUrl = process.env.NEXT_PUBLIC_FLASK_API_URL || '';
-    
-    try {
-      let videoS3Key: string | null = null;
-      const videoBlob = new Blob(recordedChunks.current, { type: "video/webm" });
-      
-      if (videoBlob.size > 0) {
-          const videoFormData = new FormData();
-          videoFormData.append('video', videoBlob, "user_recording.webm");
-          
-          const jwt = Cookies.get('jwt');
-          if (!jwt) throw new Error("Token JWT no encontrado.");
+      // 2) Construir transcripts
+      const userTranscript = sessionMessages
+        .filter(m => m.sender === MessageSender.CLIENT)
+        .map(m => m.content).join('\n');
+      const avatarTranscript = sessionMessages
+        .filter(m => m.sender === MessageSender.AVATAR)
+        .map(m => m.content).join('\n');
+      const duration = 480 - recordingTimerRef.current;
+      const flaskApiUrl = process.env.NEXT_PUBLIC_FLASK_API_URL || '';
 
-          const headers = new Headers();
-          headers.append('Authorization', `Bearer ${jwt}`);
-
+      try {
+        // 3) Subir vídeo
+        let videoS3Key: string | null = null;
+        const videoBlob = new Blob(recordedChunks.current, { type: "video/webm" });
+        if (videoBlob.size > 0) {
+          const form = new FormData();
+          form.append('video', videoBlob, 'user_recording.webm');
+          const jwt = Cookies.get('jwt')!;
           const uploadRes = await fetch(`${flaskApiUrl}/upload_video`, {
-              method: "POST", headers: headers, body: videoFormData,
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${jwt}` },
+            body: form
           });
-
-          if (!uploadRes.ok) {
-              const errorData = await uploadRes.json();
-              throw new Error(`Error al subir video: ${uploadRes.status} - ${errorData.error || 'Error desconocido'}`);
-          }
           const uploadData = await uploadRes.json();
           videoS3Key = uploadData.s3_object_key;
-      }
+        }
 
-      await fetch(`${flaskApiUrl}/log_full_session`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: sessionInfo.name, email: sessionInfo.email, scenario: sessionInfo.scenario,
-          conversation: userTranscript, avatar_transcript: avatarTranscript,
-          duration: duration, video_object_key: videoS3Key
-        })
-      });
-    } catch (err: any) {
-        console.error("❌ Error en la finalización:", err);
-        alert(`⚠️ Ocurrió un error: ${err.message}`);
-    } finally {
+        // 4) Log de sesión
+        await fetch(`${flaskApiUrl}/log_full_session`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: sessionInfo.name,
+            email: sessionInfo.email,
+            scenario: sessionInfo.scenario,
+            conversation: userTranscript,
+            avatar_transcript: avatarTranscript,
+            duration,
+            s3_object_key: videoS3Key
+          })
+        });
+      } catch (err: any) {
+        console.error("❌ Error finalizando sesión:", err);
+        alert(`⚠️ ${err.message}`);
+      } finally {
         router.push('/dashboard');
-    }
-  }, [sessionInfo, router, stopAvatar, stopUserCameraRecording]);
+      }
+    };
+
+    // 5) Por último, paramos la grabación y se disparará onstop
+    mediaRecorderRef.current.stop();
+  }
+}, [
+  sessionInfo, stopAvatar, stopUserCameraRecording, router
+]);
+
   
   const fetchAccessToken = useCallback(async () => {
     try {
