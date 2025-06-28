@@ -91,9 +91,6 @@ function InteractiveSessionContent() {
       router.push('/dashboard');
     }
   }, [router, searchParams]);
-
-  // ======================= INICIO DEL BLOQUE CORREGIDO =======================
-  // Estas funciones estaban faltando en la versión anterior.
   
   const stopUserCameraRecording = useCallback(() => {
     if (localUserStreamRef.current) {
@@ -131,7 +128,7 @@ function InteractiveSessionContent() {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
         mediaRecorderRef.current.stop();
     }
-    stopUserCameraRecording(); // Se llama aquí para asegurar que la cámara se detenga
+    stopUserCameraRecording();
 
     const userTranscript = sessionMessages.filter(m => m.sender === MessageSender.CLIENT).map(m => m.content).join('\n');
     const avatarTranscript = sessionMessages.filter(m => m.sender === MessageSender.AVATAR).map(m => m.content).join('\n');
@@ -180,7 +177,6 @@ function InteractiveSessionContent() {
         router.push('/dashboard');
     }
   }, [sessionInfo, router, stopAvatar, stopUserCameraRecording]);
-  // ======================== FIN DEL BLOQUE CORREGIDO =======================
 
   const fetchAccessToken = useCallback(async () => {
     try {
@@ -365,4 +361,3 @@ export default function InteractiveSessionWrapper() {
     </StreamingAvatarProvider>
   );
 }
-```
