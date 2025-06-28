@@ -81,13 +81,11 @@ function InteractiveSessionContent() {
 
     if (name && email && scenario && token) {
       setSessionInfo({ name, email, scenario, token });
-
-      Cookies.set('jwt',   token, { sameSite: 'Lax' });
+      // Guardar cookies para la UI o futuras sesiones si es necesario
       Cookies.set('user_name',  name,   { sameSite: 'Lax' });
       Cookies.set('user_email', email,  { sameSite: 'Lax' });
-      Cookies.set('user_token', token,  { sameSite: 'Lax' });
-
     } else {
+      console.error("Faltan parámetros en la URL (name, email, scenario, token). Redirigiendo...");
       router.push('/dashboard');
     }
   }, [router, searchParams]);
@@ -119,61 +117,57 @@ function InteractiveSessionContent() {
     } catch (err) { console.error('Error al iniciar MediaRecorder:', err); }
   }, []);
   
-const stopAndFinalizeSession = useCallback((sessionMessages: any[]) => {
-  if (isFinalizingRef.current || !sessionInfo) return;
-  isFinalizingRef.current = true;
-  console.log("🛑 Finalizando sesión…");
-  stopAvatar();
-
-  if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
-    mediaRecorderRef.current.onstop = async () => {
-      // 1) Parar cámara y liberar recursos
+  const stopAndFinalizeSession = useCallback(async (sessionMessages: any[]) => {
+    if (isFinalizingRef.current || !sessionInfo) {
+      console.log("Finalización omitida: ya en progreso o falta información de sesión.");
+      return;
+    }
+    isFinalizingRef.current = true;
+    console.log("🛑 Finalizando sesión…");
+    stopAvatar();
+  
+    const finalize = async () => {
       stopUserCameraRecording();
-
-      // 2) Construir transcripts
-      const userTranscript = sessionMessages
-        .filter(m => m.sender === MessageSender.CLIENT)
-        .map(m => m.content).join('\n');
-      const avatarTranscript = sessionMessages
-        .filter(m => m.sender === MessageSender.AVATAR)
-        .map(m => m.content).join('\n');
+  
+      const userTranscript = sessionMessages.filter(m => m.sender === MessageSender.CLIENT).map(m => m.content).join('\n');
+      const avatarTranscript = sessionMessages.filter(m => m.sender === MessageSender.AVATAR).map(m => m.content).join('\n');
       const duration = 480 - recordingTimerRef.current;
       const flaskApiUrl = process.env.NEXT_PUBLIC_FLASK_API_URL || '';
-
-      try {
-        // 3) Subir vídeo
-        let videoS3Key: string | null = null;
-        const videoBlob = new Blob(recordedChunks.current, { type: "video/webm" });
-if (videoBlob.size > 0) {
-  const form = new FormData();
-  form.append('video', videoBlob, 'user_recording.webm');
-  const jwt = sessionInfo.token;
   
-  console.log('[API] Subiendo video a:', flaskApiUrl);
-  console.log('[API] JWT upload_video:', jwt);
-
-  const uploadRes = await fetch(`${flaskApiUrl}/upload_video`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${jwt}` },
-    body: form,
-  });
-
-  console.log('[API] upload_video status:', uploadRes.status);
-  // parseamos UNA sola vez:
-  const uploadJson = await uploadRes.json();
-  console.log('[API] upload_video response JSON:', uploadJson);
-
-  if (!uploadRes.ok) {
-    // mostramos mensaje de error detallado
-    throw new Error(
-      `Upload error ${uploadRes.status}: ` +
-      (uploadJson.error || uploadJson.message || JSON.stringify(uploadJson))
-    );
-  }
-
-  videoS3Key = uploadJson.s3_object_key;
-}
-        // 4) Log de sesión
+      try {
+        let videoS3Key: string | null = null;
+        if (recordedChunks.current.length > 0) {
+          const videoBlob = new Blob(recordedChunks.current, { type: "video/webm" });
+          if (videoBlob.size > 0) {
+            const form = new FormData();
+            form.append('video', videoBlob, 'user_recording.webm');
+            
+            // 🔥 CORRECCIÓN PRINCIPAL: Usar el token del estado `sessionInfo`
+            const jwt = sessionInfo.token;
+            
+            console.log('[API] Subiendo video a:', flaskApiUrl);
+            console.log('[API] Usando JWT para upload_video:', jwt);
+  
+            const uploadRes = await fetch(`${flaskApiUrl}/upload_video`, {
+              method: 'POST',
+              headers: { 
+                // NO incluir Content-Type aquí, el navegador lo hace por ti con FormData
+                'Authorization': `Bearer ${jwt}` 
+              },
+              body: form,
+            });
+  
+            console.log('[API] upload_video status:', uploadRes.status);
+            const uploadJson = await uploadRes.json();
+            console.log('[API] upload_video response JSON:', uploadJson);
+  
+            if (!uploadRes.ok) {
+              throw new Error(`Error en la subida ${uploadRes.status}: ${uploadJson.error || uploadJson.message || 'Error desconocido'}`);
+            }
+            videoS3Key = uploadJson.s3_object_key;
+          }
+        }
+  
         await fetch(`${flaskApiUrl}/log_full_session`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -187,6 +181,7 @@ if (videoBlob.size > 0) {
             s3_object_key: videoS3Key
           })
         });
+  
       } catch (err: any) {
         console.error("❌ Error finalizando sesión:", err);
         alert(`⚠️ ${err.message}`);
@@ -194,14 +189,14 @@ if (videoBlob.size > 0) {
         router.push('/dashboard');
       }
     };
-
-    // 5) Por último, paramos la grabación y se disparará onstop
-    mediaRecorderRef.current.stop();
-  }
-}, [
-  sessionInfo, stopAvatar, stopUserCameraRecording, router
-]);
-
+  
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+      mediaRecorderRef.current.onstop = finalize;
+      mediaRecorderRef.current.stop();
+    } else {
+      finalize(); // Si no hay grabación, igual finaliza la sesión
+    }
+  }, [sessionInfo, stopAvatar, stopUserCameraRecording, router]);
   
   const fetchAccessToken = useCallback(async () => {
     try {
