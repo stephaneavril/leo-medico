@@ -54,10 +54,10 @@ function InteractiveSessionContent() {
 
   const [config, setConfig] = useState<StartAvatarRequest>(DEFAULT_CONFIG);
   
-  // Usamos un Ref para el token para evitar problemas de estado obsoleto
+  // 🔥 CORRECCIÓN: Usamos un Ref para la información de la sesión para evitar datos obsoletos.
   const sessionInfoRef = useRef<{ name: string; email: string; scenario: string; token: string } | null>(null);
 
-  const [uiState, setUiState] = useState<{scenario: string | null}>({ scenario: null });
+  const [uiState, setUiState] = useState<{ scenario: string | null }>({ scenario: null });
   const [showAutoplayBlockedMessage, setShowAutoplayBlockedMessage] = useState(false);
   const [isAttemptingAutoStart, setIsAttemptingAutoStart] = useState(false);
   const [hasUserMediaPermission, setHasUserMediaPermission] = useState(false);
@@ -84,14 +84,12 @@ function InteractiveSessionContent() {
     const token = searchParams.get('token');
 
     if (name && email && scenario && token) {
-      // Guardamos la información en el Ref
       sessionInfoRef.current = { name, email, scenario, token };
-      // Actualizamos el estado solo para la UI
       setUiState({ scenario });
       Cookies.set('user_name', name, { sameSite: 'Lax' });
       Cookies.set('user_email', email, { sameSite: 'Lax' });
     } else {
-      console.error("Faltan parámetros en la URL. Redirigiendo...");
+      console.error("Faltan parámetros en la URL (name, email, scenario, token). Redirigiendo...");
       router.push('/dashboard');
     }
   }, [router, searchParams]);
@@ -241,7 +239,7 @@ function InteractiveSessionContent() {
   }, [hasUserMediaPermission, fetchAccessToken, initAvatar, config, startAvatar, startVoiceChat, stopAndFinalizeSession, handleUserTalkingMessage, handleStreamingTalkingMessage]);
 
   useEffect(() => {
-    if (!sessionInfoRef.current) return;
+    if (!mounted) return; // Solo ejecutar después del montaje inicial
     const getUserMediaStream = async () => {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: { width: 640, height: 480, frameRate: 15 }});
@@ -254,7 +252,7 @@ function InteractiveSessionContent() {
       }
     };
     getUserMediaStream();
-  }, [mounted]); // Depende de `mounted` para asegurar que se ejecute solo en el cliente
+  }, [mounted]);
 
   useEffect(() => {
     if (sessionState === StreamingAvatarSessionState.CONNECTED && hasUserMediaPermission && !mediaRecorderRef.current) {
