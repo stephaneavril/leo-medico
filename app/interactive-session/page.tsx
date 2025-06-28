@@ -47,13 +47,19 @@ function InteractiveSessionContent() {
   const searchParams = useSearchParams();
   
   const {
-    initAvatar, startAvatar, stopAvatar, sessionState, stream, messages,
-    handleUserTalkingMessage, handleStreamingTalkingMessage
+    initAvatar,
+    startAvatar,
+    stopAvatar,
+    sessionState,
+    stream,
+    messages,
+    handleUserTalkingMessage,
+    handleStreamingTalkingMessage,
   } = useStreamingAvatarSession();
   const { startVoiceChat } = useVoiceChat();
 
   const [config, setConfig] = useState<StartAvatarRequest>(DEFAULT_CONFIG);
-  const [sessionInfo, setSessionInfo] = useState<{ name: string; email: string; scenario: string; token: string; } | null>(null);
+  const [sessionInfo, setSessionInfo] = useState<{ name: string; email: string; scenario: string; token: string } | null>(null);
   const [showAutoplayBlockedMessage, setShowAutoplayBlockedMessage] = useState(false);
   const [isAttemptingAutoStart, setIsAttemptingAutoStart] = useState(false);
   const [hasUserMediaPermission, setHasUserMediaPermission] = useState(false);
@@ -85,24 +91,57 @@ function InteractiveSessionContent() {
       router.push('/dashboard');
     }
   }, [router, searchParams]);
-
-  // ======================= INICIO DEL BLOQUE CORREGIDO =======================
   
-  const uploadAndLog = useCallback(async (videoBlob: Blob | null) => {
-    // Esta función ahora usa sessionInfo directamente del estado
-    if (!sessionInfo) {
-      console.error("No hay información de sesión para finalizar.");
-      return;
+  const stopUserCameraRecording = useCallback(() => {
+    if (localUserStreamRef.current) {
+        localUserStreamRef.current.getTracks().forEach(track => track.stop());
+        localUserStreamRef.current = null;
     }
-    
-    const userTranscript = messagesRef.current.filter(m => m.sender === MessageSender.CLIENT).map(m => m.content).join('\n');
-    const avatarTranscript = messagesRef.current.filter(m => m.sender === MessageSender.AVATAR).map(m => m.content).join('\n');
+    if (userCameraRef.current) {
+        userCameraRef.current.srcObject = null;
+    }
+  }, []);
+
+  const startUserCameraRecording = useCallback(() => {
+    if (!localUserStreamRef.current || mediaRecorderRef.current) return;
+    try {
+      const recorder = new MediaRecorder(localUserStreamRef.current, {
+        mimeType: 'video/webm; codecs=vp8',
+        videoBitsPerSecond: 2500000,
+        audioBitsPerSecond: 128000
+      });
+      recordedChunks.current = [];
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) recordedChunks.current.push(e.data);
+      };
+      recorder.start();
+      mediaRecorderRef.current = recorder;
+    } catch (err) { console.error('Error al iniciar MediaRecorder:', err); }
+  }, []);
+  
+  // ======================= INICIO DEL BLOQUE CORREGIDO =======================
+  // La función ahora se define para aceptar el array de mensajes
+  const stopAndFinalizeSession = useCallback(async (sessionMessages: any[]) => {
+    if (isFinalizingRef.current || !sessionInfo) return;
+    isFinalizingRef.current = true;
+    console.log("🛑 Finalizando sesión...");
+    stopAvatar();
+
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+        mediaRecorderRef.current.stop();
+    }
+    stopUserCameraRecording();
+
+    const userTranscript = sessionMessages.filter(m => m.sender === MessageSender.CLIENT).map(m => m.content).join('\n');
+    const avatarTranscript = sessionMessages.filter(m => m.sender === MessageSender.AVATAR).map(m => m.content).join('\n');
     const duration = 480 - recordingTimerRef.current;
     const flaskApiUrl = process.env.NEXT_PUBLIC_FLASK_API_URL || '';
     
     try {
       let videoS3Key: string | null = null;
-      if (videoBlob && videoBlob.size > 0) {
+      const videoBlob = new Blob(recordedChunks.current, { type: "video/webm" });
+      
+      if (videoBlob.size > 0) {
           const videoFormData = new FormData();
           videoFormData.append('video', videoBlob, "user_recording.webm");
           
@@ -139,45 +178,7 @@ function InteractiveSessionContent() {
     } finally {
         router.push('/dashboard');
     }
-  }, [sessionInfo, router]);
-
-  const stopAndFinalizeSession = useCallback(async () => {
-    if (isFinalizingRef.current) return;
-    isFinalizingRef.current = true;
-    console.log("🛑 Finalizando sesión...");
-    stopAvatar();
-
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
-        mediaRecorderRef.current.onstop = () => {
-            const videoBlob = new Blob(recordedChunks.current, { type: "video/webm" });
-            uploadAndLog(videoBlob);
-        };
-        mediaRecorderRef.current.stop();
-    } else {
-        uploadAndLog(null);
-    }
-    
-    if (localUserStreamRef.current) {
-        localUserStreamRef.current.getTracks().forEach(track => track.stop());
-    }
-  }, [stopAvatar, uploadAndLog]);
-
-  const startUserCameraRecording = useCallback(() => {
-    if (!localUserStreamRef.current || mediaRecorderRef.current) return;
-    try {
-      const recorder = new MediaRecorder(localUserStreamRef.current, {
-        mimeType: 'video/webm; codecs=vp8',
-        videoBitsPerSecond: 2500000,
-        audioBitsPerSecond: 128000
-      });
-      recordedChunks.current = [];
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) recordedChunks.current.push(e.data);
-      };
-      recorder.start();
-      mediaRecorderRef.current = recorder;
-    } catch (err) { console.error('Error al iniciar MediaRecorder:', err); }
-  }, []);
+  }, [sessionInfo, router, stopAvatar, stopUserCameraRecording]);
   // ======================== FIN DEL BLOQUE CORREGIDO =======================
 
   const fetchAccessToken = useCallback(async () => {
@@ -202,7 +203,7 @@ function InteractiveSessionContent() {
       const avatar = initAvatar(heygenToken);
       
       avatar.on(StreamingEvents.STREAM_DISCONNECTED, () => {
-        if (!isFinalizingRef.current) stopAndFinalizeSession();
+        if (!isFinalizingRef.current) stopAndFinalizeSession(messagesRef.current);
       });
       avatar.on(StreamingEvents.STREAM_READY, () => setIsAttemptingAutoStart(false));
       avatar.on(StreamingEvents.USER_TALKING_MESSAGE, (e) => handleUserTalkingMessage({ detail: e.detail }));
@@ -266,7 +267,7 @@ function InteractiveSessionContent() {
         setTimerDisplay(formatTime(recordingTimerRef.current));
         if (recordingTimerRef.current <= 0) {
           clearInterval(interval);
-          stopAndFinalizeSession();
+          stopAndFinalizeSession(messagesRef.current);
         }
       }, 1000);
     }
@@ -275,7 +276,7 @@ function InteractiveSessionContent() {
 
   useUnmount(() => {
     if (!isFinalizingRef.current) {
-        stopAndFinalizeSession();
+        stopAndFinalizeSession(messagesRef.current);
     }
   });
   
