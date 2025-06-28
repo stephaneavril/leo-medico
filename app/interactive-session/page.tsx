@@ -245,20 +245,29 @@ function InteractiveSessionContent() {
     document.body.appendChild(simpleProcessingDiv);
 
 
-    let videoS3Key: string | null = null;
+let videoS3Key: string | null = null;
     try {
-      if (finalVideoBlob) { // Use finalVideoBlob here
+      if (finalVideoBlob) { 
         console.log("Attempting to upload recording to Flask...");
-        const videoFormData = new FormData(); // Define videoFormData here, inside the if block
+        const videoFormData = new FormData();
         videoFormData.append('video', finalVideoBlob, "user_recording.webm");
         videoFormData.append('name', name || 'unknown');
         videoFormData.append('email', email || 'unknown');
 
-        const uploadRes = await fetch(`${trimmedFlaskApiUrl}/upload_video`, { // Use trimmedFlaskApiUrl
+        // ==== INICIO DE LA CORRECCIÓN ====
+        // Leemos el token de la cookie y lo añadimos a la petición
+        const jwt = Cookies.get('jwt');
+        const headers: HeadersInit = {};
+        if (jwt) {
+          headers['Authorization'] = `Bearer ${jwt}`;
+        }
+        
+        const uploadRes = await fetch(`${trimmedFlaskApiUrl}/upload_video`, { 
           method: "POST",
+          headers: headers, // <-- AÑADIMOS LOS HEADERS AQUÍ
           body: videoFormData,
         });
-
+        
         if (uploadRes.ok) {
           const uploadData = await uploadRes.json();
           videoS3Key = uploadData.s3_object_key;
