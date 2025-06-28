@@ -53,7 +53,11 @@ function InteractiveSessionContent() {
   const { startVoiceChat } = useVoiceChat();
 
   const [config, setConfig] = useState<StartAvatarRequest>(DEFAULT_CONFIG);
-  const [sessionInfo, setSessionInfo] = useState<{ name: string; email: string; scenario: string; token: string } | null>(null);
+  
+  // Usamos un Ref para el token para evitar problemas de estado obsoleto
+  const sessionInfoRef = useRef<{ name: string; email: string; scenario: string; token: string } | null>(null);
+
+  const [uiState, setUiState] = useState<{scenario: string | null}>({ scenario: null });
   const [showAutoplayBlockedMessage, setShowAutoplayBlockedMessage] = useState(false);
   const [isAttemptingAutoStart, setIsAttemptingAutoStart] = useState(false);
   const [hasUserMediaPermission, setHasUserMediaPermission] = useState(false);
@@ -80,12 +84,14 @@ function InteractiveSessionContent() {
     const token = searchParams.get('token');
 
     if (name && email && scenario && token) {
-      setSessionInfo({ name, email, scenario, token });
-      // Guardar cookies para la UI o futuras sesiones si es necesario
-      Cookies.set('user_name',  name,   { sameSite: 'Lax' });
-      Cookies.set('user_email', email,  { sameSite: 'Lax' });
+      // Guardamos la información en el Ref
+      sessionInfoRef.current = { name, email, scenario, token };
+      // Actualizamos el estado solo para la UI
+      setUiState({ scenario });
+      Cookies.set('user_name', name, { sameSite: 'Lax' });
+      Cookies.set('user_email', email, { sameSite: 'Lax' });
     } else {
-      console.error("Faltan parámetros en la URL (name, email, scenario, token). Redirigiendo...");
+      console.error("Faltan parámetros en la URL. Redirigiendo...");
       router.push('/dashboard');
     }
   }, [router, searchParams]);
@@ -98,10 +104,13 @@ function InteractiveSessionContent() {
     if (userCameraRef.current) {
         userCameraRef.current.srcObject = null;
     }
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+        mediaRecorderRef.current.stop();
+    }
   }, []);
 
   const startUserCameraRecording = useCallback(() => {
-    if (!localUserStreamRef.current || mediaRecorderRef.current) return;
+    if (!localUserStreamRef.current || mediaRecorderRef.current?.state === 'recording') return;
     try {
       const recorder = new MediaRecorder(localUserStreamRef.current, {
         mimeType: 'video/webm; codecs=vp8',
@@ -118,8 +127,7 @@ function InteractiveSessionContent() {
   }, []);
   
   const stopAndFinalizeSession = useCallback(async (sessionMessages: any[]) => {
-    if (isFinalizingRef.current || !sessionInfo) {
-      console.log("Finalización omitida: ya en progreso o falta información de sesión.");
+    if (isFinalizingRef.current || !sessionInfoRef.current) {
       return;
     }
     isFinalizingRef.current = true;
@@ -129,6 +137,7 @@ function InteractiveSessionContent() {
     const finalize = async () => {
       stopUserCameraRecording();
   
+      const sessionInfo = sessionInfoRef.current!;
       const userTranscript = sessionMessages.filter(m => m.sender === MessageSender.CLIENT).map(m => m.content).join('\n');
       const avatarTranscript = sessionMessages.filter(m => m.sender === MessageSender.AVATAR).map(m => m.content).join('\n');
       const duration = 480 - recordingTimerRef.current;
@@ -142,7 +151,6 @@ function InteractiveSessionContent() {
             const form = new FormData();
             form.append('video', videoBlob, 'user_recording.webm');
             
-            // 🔥 CORRECCIÓN PRINCIPAL: Usar el token del estado `sessionInfo`
             const jwt = sessionInfo.token;
             
             console.log('[API] Subiendo video a:', flaskApiUrl);
@@ -151,16 +159,12 @@ function InteractiveSessionContent() {
             const uploadRes = await fetch(`${flaskApiUrl}/upload_video`, {
               method: 'POST',
               headers: { 
-                // NO incluir Content-Type aquí, el navegador lo hace por ti con FormData
                 'Authorization': `Bearer ${jwt}` 
               },
               body: form,
             });
   
-            console.log('[API] upload_video status:', uploadRes.status);
             const uploadJson = await uploadRes.json();
-            console.log('[API] upload_video response JSON:', uploadJson);
-  
             if (!uploadRes.ok) {
               throw new Error(`Error en la subida ${uploadRes.status}: ${uploadJson.error || uploadJson.message || 'Error desconocido'}`);
             }
@@ -194,9 +198,9 @@ function InteractiveSessionContent() {
       mediaRecorderRef.current.onstop = finalize;
       mediaRecorderRef.current.stop();
     } else {
-      finalize(); // Si no hay grabación, igual finaliza la sesión
+      finalize();
     }
-  }, [sessionInfo, stopAvatar, stopUserCameraRecording, router]);
+  }, [stopAvatar, stopUserCameraRecording, router]);
   
   const fetchAccessToken = useCallback(async () => {
     try {
@@ -237,7 +241,7 @@ function InteractiveSessionContent() {
   }, [hasUserMediaPermission, fetchAccessToken, initAvatar, config, startAvatar, startVoiceChat, stopAndFinalizeSession, handleUserTalkingMessage, handleStreamingTalkingMessage]);
 
   useEffect(() => {
-    if (!sessionInfo) return;
+    if (!sessionInfoRef.current) return;
     const getUserMediaStream = async () => {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: { width: 640, height: 480, frameRate: 15 }});
@@ -250,7 +254,7 @@ function InteractiveSessionContent() {
       }
     };
     getUserMediaStream();
-  }, [sessionInfo]);
+  }, [mounted]); // Depende de `mounted` para asegurar que se ejecute solo en el cliente
 
   useEffect(() => {
     if (sessionState === StreamingAvatarSessionState.CONNECTED && hasUserMediaPermission && !mediaRecorderRef.current) {
@@ -306,7 +310,7 @@ function InteractiveSessionContent() {
     }
   }
 
-  if (!mounted || !sessionInfo) {
+  if (!mounted || !uiState.scenario) {
     return (
         <div className="w-screen h-screen flex flex-col items-center justify-center bg-zinc-900 text-white">
             <LoadingIcon className="w-10 h-10 animate-spin" />
@@ -318,7 +322,7 @@ function InteractiveSessionContent() {
   return (
     <div className="w-screen h-screen flex flex-col items-center bg-zinc-900 text-white relative">
       <h1 className="text-3xl font-bold text-blue-400 mt-6 mb-4" suppressHydrationWarning>
-        {`🧠 Leo – ${sessionInfo.scenario}`}
+        {`🧠 Leo – ${uiState.scenario}`}
       </h1>
       
       {sessionState === StreamingAvatarSessionState.INACTIVE && !hasUserMediaPermission && !showAutoplayBlockedMessage && (
