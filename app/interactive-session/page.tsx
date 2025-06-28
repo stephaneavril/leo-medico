@@ -99,8 +99,7 @@ function InteractiveSessionContent() {
     }
   }, [router, searchParams]);
 
-  // Se ha hecho esta función más robusta usando la ref del timer.
-  const stopAndFinalizeSession = useCallback(async () => {
+   const stopAndFinalizeSession = useCallback(async (sessionMessages: any[]) => {
     if (isFinalizingRef.current || !sessionInfo) return;
     isFinalizingRef.current = true;
     console.log("🛑 Finalizando sesión...");
@@ -113,8 +112,8 @@ function InteractiveSessionContent() {
         localUserStreamRef.current.getTracks().forEach(track => track.stop());
     }
 
-    const userTranscript = messagesRef.current.filter(m => m.sender === MessageSender.CLIENT).map(m => m.content).join('\n');
-    const avatarTranscript = messagesRef.current.filter(m => m.sender === MessageSender.AVATAR).map(m => m.content).join('\n');
+    const userTranscript = sessionMessages.filter(m => m.sender === MessageSender.CLIENT).map(m => m.content).join('\n');
+    const avatarTranscript = sessionMessages.filter(m => m.sender === MessageSender.AVATAR).map(m => m.content).join('\n');
     const duration = 480 - recordingTimerRef.current;
     const flaskApiUrl = process.env.NEXT_PUBLIC_FLASK_API_URL || '';
     
