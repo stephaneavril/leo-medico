@@ -1,5 +1,3 @@
-// app/interactive-session/page.tsx
-
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
@@ -61,17 +59,21 @@ function InteractiveSessionContent() {
   const { startVoiceChat } = useVoiceChat();
 
   const [config, setConfig] = useState<StartAvatarRequest>(DEFAULT_CONFIG);
+  
+  // La definición del estado es correcta, pero la llamada para actualizarlo era el problema.
   const [sessionInfo, setSessionInfo] = useState<{ name: string; email: string; scenario: string; token: string } | null>(null);
+  
   const [showAutoplayBlockedMessage, setShowAutoplayBlockedMessage] = useState(false);
   const [isAttemptingAutoStart, setIsAttemptingAutoStart] = useState(false);
-  const [recordingTimer, setRecordingTimer] = useState(480);
   const [hasUserMediaPermission, setHasUserMediaPermission] = useState(false);
   const [mounted, setMounted] = useState(false);
 
+  // SOLUCIÓN: Usar ref para el temporizador para estabilidad en callbacks.
+  const recordingTimerRef = useRef<number>(480);
+  const [timerDisplay, setTimerDisplay] = useState('08:00');
+  
   const messagesRef = useRef<any[]>([]);
-  useEffect(() => {
-    messagesRef.current = messages;
-  }, [messages]);
+  useEffect(() => { messagesRef.current = messages; }, [messages]);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordedChunks = useRef<Blob[]>([]);
@@ -80,20 +82,24 @@ function InteractiveSessionContent() {
   const avatarVideoRef = useRef<HTMLVideoElement>(null);
   const isFinalizingRef = useRef(false);
 
-   useEffect(() => {
+  // CÓDIGO CORREGIDO: Se añade el `token` al objeto de setSessionInfo.
+  useEffect(() => {
     setMounted(true);
     const name = searchParams.get('name');
     const email = searchParams.get('email');
     const scenario = searchParams.get('scenario');
+    const token = searchParams.get('token'); // <- Se obtiene el token
 
-    if (name && email && scenario) {
-      setSessionInfo({ name, email, scenario });
+    if (name && email && scenario && token) {
+      // La llamada ahora es correcta y cumple con el tipo definido.
+      setSessionInfo({ name, email, scenario, token });
     } else {
-      console.warn("Faltan datos de sesión en la URL, redirigiendo al dashboard.");
+      console.warn("Faltan datos de sesión en la URL, redirigiendo.");
       router.push('/dashboard');
     }
   }, [router, searchParams]);
 
+  // Se ha hecho esta función más robusta usando la ref del timer.
   const stopAndFinalizeSession = useCallback(async () => {
     if (isFinalizingRef.current || !sessionInfo) return;
     isFinalizingRef.current = true;
@@ -109,7 +115,7 @@ function InteractiveSessionContent() {
 
     const userTranscript = messagesRef.current.filter(m => m.sender === MessageSender.CLIENT).map(m => m.content).join('\n');
     const avatarTranscript = messagesRef.current.filter(m => m.sender === MessageSender.AVATAR).map(m => m.content).join('\n');
-    const duration = 480 - recordingTimer;
+    const duration = 480 - recordingTimerRef.current;
     const flaskApiUrl = process.env.NEXT_PUBLIC_FLASK_API_URL || '';
     
     try {
@@ -155,7 +161,7 @@ function InteractiveSessionContent() {
     } finally {
         router.push('/dashboard');
     }
-  }, [stopAvatar, sessionInfo, router, recordingTimer]);
+  }, [sessionInfo, router, stopAvatar]);
 
   const fetchAccessToken = useCallback(async () => {
     try {
