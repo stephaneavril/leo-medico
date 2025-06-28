@@ -5,7 +5,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useUnmount } from 'ahooks';
 import { useRouter, useSearchParams } from 'next/navigation';
-import Cookies from 'js-cookie'; // Asegúrate de que js-cookie esté instalado
+import Cookies from 'js-cookie';
 
 import {
   AvatarQuality,
@@ -388,7 +388,7 @@ function InteractiveSessionContent() {
 // El Wrapper se mantiene igual
 export default function InteractiveSessionWrapper() {
   return (
-    <StreamingAvatarProvider basePath={process.env.NEXT_PUBLIC_BASE_API_URL || ''}>
+    <StreamingAvatarProvider basePath={process.env.NEXT_PUBLIC_FLASK_API_URL || ''}>
       <InteractiveSessionContent />
     </StreamingAvatarProvider>
   );
