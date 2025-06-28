@@ -59,16 +59,12 @@ function InteractiveSessionContent() {
   const { startVoiceChat } = useVoiceChat();
 
   const [config, setConfig] = useState<StartAvatarRequest>(DEFAULT_CONFIG);
-  
-  // La definición del estado es correcta, pero la llamada para actualizarlo era el problema.
   const [sessionInfo, setSessionInfo] = useState<{ name: string; email: string; scenario: string; token: string } | null>(null);
-  
   const [showAutoplayBlockedMessage, setShowAutoplayBlockedMessage] = useState(false);
   const [isAttemptingAutoStart, setIsAttemptingAutoStart] = useState(false);
   const [hasUserMediaPermission, setHasUserMediaPermission] = useState(false);
   const [mounted, setMounted] = useState(false);
 
-  // SOLUCIÓN: Usar ref para el temporizador para estabilidad en callbacks.
   const recordingTimerRef = useRef<number>(480);
   const [timerDisplay, setTimerDisplay] = useState('08:00');
   
@@ -82,24 +78,51 @@ function InteractiveSessionContent() {
   const avatarVideoRef = useRef<HTMLVideoElement>(null);
   const isFinalizingRef = useRef(false);
 
-  // CÓDIGO CORREGIDO: Se añade el `token` al objeto de setSessionInfo.
   useEffect(() => {
     setMounted(true);
     const name = searchParams.get('name');
     const email = searchParams.get('email');
     const scenario = searchParams.get('scenario');
-    const token = searchParams.get('token'); // <- Se obtiene el token
+    const token = searchParams.get('token');
 
     if (name && email && scenario && token) {
-      // La llamada ahora es correcta y cumple con el tipo definido.
       setSessionInfo({ name, email, scenario, token });
     } else {
-      console.warn("Faltan datos de sesión en la URL, redirigiendo.");
       router.push('/dashboard');
     }
   }, [router, searchParams]);
 
-   const stopAndFinalizeSession = useCallback(async (sessionMessages: any[]) => {
+  // ======================= INICIO DEL BLOQUE CORREGIDO =======================
+  // Estas funciones estaban faltando en la versión anterior.
+  
+  const stopUserCameraRecording = useCallback(() => {
+    if (localUserStreamRef.current) {
+        localUserStreamRef.current.getTracks().forEach(track => track.stop());
+        localUserStreamRef.current = null;
+    }
+    if (userCameraRef.current) {
+        userCameraRef.current.srcObject = null;
+    }
+  }, []);
+
+  const startUserCameraRecording = useCallback(() => {
+    if (!localUserStreamRef.current || mediaRecorderRef.current) return;
+    try {
+      const recorder = new MediaRecorder(localUserStreamRef.current, {
+        mimeType: 'video/webm; codecs=vp8',
+        videoBitsPerSecond: 2500000,
+        audioBitsPerSecond: 128000
+      });
+      recordedChunks.current = [];
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) recordedChunks.current.push(e.data);
+      };
+      recorder.start();
+      mediaRecorderRef.current = recorder;
+    } catch (err) { console.error('Error al iniciar MediaRecorder:', err); }
+  }, []);
+  
+  const stopAndFinalizeSession = useCallback(async (sessionMessages: any[]) => {
     if (isFinalizingRef.current || !sessionInfo) return;
     isFinalizingRef.current = true;
     console.log("🛑 Finalizando sesión...");
@@ -108,9 +131,7 @@ function InteractiveSessionContent() {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
         mediaRecorderRef.current.stop();
     }
-    if (localUserStreamRef.current) {
-        localUserStreamRef.current.getTracks().forEach(track => track.stop());
-    }
+    stopUserCameraRecording(); // Se llama aquí para asegurar que la cámara se detenga
 
     const userTranscript = sessionMessages.filter(m => m.sender === MessageSender.CLIENT).map(m => m.content).join('\n');
     const avatarTranscript = sessionMessages.filter(m => m.sender === MessageSender.AVATAR).map(m => m.content).join('\n');
@@ -132,9 +153,7 @@ function InteractiveSessionContent() {
           headers.append('Authorization', `Bearer ${jwt}`);
 
           const uploadRes = await fetch(`${flaskApiUrl}/upload_video`, {
-              method: "POST",
-              headers: headers,
-              body: videoFormData,
+              method: "POST", headers: headers, body: videoFormData,
           });
 
           if (!uploadRes.ok) {
@@ -160,7 +179,8 @@ function InteractiveSessionContent() {
     } finally {
         router.push('/dashboard');
     }
-  }, [sessionInfo, router, stopAvatar]);
+  }, [sessionInfo, router, stopAvatar, stopUserCameraRecording]);
+  // ======================== FIN DEL BLOQUE CORREGIDO =======================
 
   const fetchAccessToken = useCallback(async () => {
     try {
@@ -189,8 +209,6 @@ function InteractiveSessionContent() {
       avatar.on(StreamingEvents.STREAM_READY, () => setIsAttemptingAutoStart(false));
       avatar.on(StreamingEvents.USER_TALKING_MESSAGE, (e) => handleUserTalkingMessage({ detail: e.detail }));
       avatar.on(StreamingEvents.AVATAR_TALKING_MESSAGE, (e) => handleStreamingTalkingMessage({ detail: e.detail }));
-      avatar.on(StreamingEvents.USER_END_MESSAGE, (event) => handleUserTalkingMessage({ detail: event.detail }));
-      avatar.on(StreamingEvents.AVATAR_END_MESSAGE, (event) => handleStreamingTalkingMessage({ detail: event.detail }));
 
       await startAvatar(config);
       if (startWithVoice) await startVoiceChat();
@@ -200,7 +218,7 @@ function InteractiveSessionContent() {
     } finally {
       setIsAttemptingAutoStart(false);
     }
-  }, [hasUserMediaPermission, fetchAccessToken, initAvatar, config, startAvatar, startVoiceChat, stopAndFinalizeSession, handleUserTalkingMessage, handleStreamingTalkingMessage, messagesRef]);
+  }, [hasUserMediaPermission, fetchAccessToken, initAvatar, config, startAvatar, startVoiceChat, stopAndFinalizeSession, handleUserTalkingMessage, handleStreamingTalkingMessage]);
 
   useEffect(() => {
     if (!sessionInfo) return;
@@ -211,8 +229,7 @@ function InteractiveSessionContent() {
         if (userCameraRef.current) userCameraRef.current.srcObject = stream;
         setHasUserMediaPermission(true);
       } catch (error) {
-        console.error("❌ Error al obtener permisos de cámara/micrófono:", error);
-        setHasUserMediaPermission(false);
+        console.error("❌ Error al obtener permisos:", error);
         setShowAutoplayBlockedMessage(true);
       }
     };
@@ -236,36 +253,34 @@ function InteractiveSessionContent() {
       };
     }
   }, [stream]);
-
-  useEffect(() => {
-    let interval: NodeJS.Timeout;
-    if (sessionState === StreamingAvatarSessionState.CONNECTED) {
-      interval = setInterval(() => {
-        setRecordingTimer(prev => {
-          if (prev <= 1) {
-            clearInterval(interval);
-            stopAndFinalizeSession(messagesRef.current);
-            return 0;
-          }
-          return prev - 1;
-        });
-      }, 1000);
-    }
-    return () => clearInterval(interval);
-  }, [sessionState, stopAndFinalizeSession, messagesRef]);
-
-  useUnmount(() => {
-    if (!isFinalizingRef.current) {
-        stopAndFinalizeSession(messagesRef.current);
-    }
-  });
-
+  
   const formatTime = (seconds: number) => {
     const minutes = Math.floor(seconds / 60);
     const remainingSeconds = seconds % 60;
     return `${minutes.toString().padStart(2, '0')}:${remainingSeconds.toString().padStart(2, '0')}`;
   };
 
+  useEffect(() => {
+    let interval: NodeJS.Timeout | undefined;
+    if (sessionState === StreamingAvatarSessionState.CONNECTED) {
+      interval = setInterval(() => {
+        recordingTimerRef.current -= 1;
+        setTimerDisplay(formatTime(recordingTimerRef.current));
+        if (recordingTimerRef.current <= 0) {
+          clearInterval(interval);
+          stopAndFinalizeSession(messagesRef.current);
+        }
+      }, 1000);
+    }
+    return () => clearInterval(interval);
+  }, [sessionState, stopAndFinalizeSession]);
+
+  useUnmount(() => {
+    if (!isFinalizingRef.current) {
+        stopAndFinalizeSession(messagesRef.current);
+    }
+  });
+  
   const handleAutoplayRetry = () => {
     if (hasUserMediaPermission) {
         setShowAutoplayBlockedMessage(false);
@@ -279,7 +294,7 @@ function InteractiveSessionContent() {
     return (
         <div className="w-screen h-screen flex flex-col items-center justify-center bg-zinc-900 text-white">
             <LoadingIcon className="w-10 h-10 animate-spin" />
-            <p className="mt-4">Cargando datos de sesión...</p>
+            <p className="mt-4">Cargando...</p>
         </div>
     );
   }
@@ -287,17 +302,17 @@ function InteractiveSessionContent() {
   return (
     <div className="w-screen h-screen flex flex-col items-center bg-zinc-900 text-white relative">
       <h1 className="text-3xl font-bold text-blue-400 mt-6 mb-4" suppressHydrationWarning>
-        {`🧠 Leo – ${sessionInfo.scenario || "Cargando..."}`}
+        {`🧠 Leo – ${sessionInfo.scenario}`}
       </h1>
       
       {sessionState === StreamingAvatarSessionState.INACTIVE && !hasUserMediaPermission && !showAutoplayBlockedMessage && (
-        <p className="text-zinc-300 mb-6">Solicitando permisos para cámara y micrófono...</p>
+        <p className="text-zinc-300 mb-6">Solicitando permisos...</p>
       )}
       {showAutoplayBlockedMessage && (
         <div className="text-red-400 mb-6">Error: Permisos de cámara/micrófono denegados o no disponibles.</div>
       )}
-
-      <div className="relative w-full max-w-4xl h-auto flex flex-col md:flex-row items-center justify-center gap-5 p-4">
+      
+      <div className="relative w-full max-w-4xl flex flex-col md:flex-row items-center justify-center gap-5 p-4">
         <div className="relative w-full md:w-1/2 aspect-video min-h-[300px] flex items-center justify-center bg-zinc-800 rounded-lg shadow-lg overflow-hidden">
           {sessionState !== StreamingAvatarSessionState.INACTIVE ? (
             <AvatarVideo ref={avatarVideoRef} />
@@ -308,11 +323,11 @@ function InteractiveSessionContent() {
             <div className="absolute inset-0 bg-black bg-opacity-75 flex flex-col items-center justify-center text-center p-4 z-30">
               <p className="mb-4 text-lg font-semibold">Video y Audio Bloqueados</p>
               <p className="mb-6">Tu navegador ha bloqueado los permisos. Haz clic para reintentar.</p>
-              <Button onClick={handleAutoplayRetry} className="bg-blue-600 hover:bg-blue-700">Habilitar Video y Audio</Button>
+              <Button onClick={handleAutoplayRetry} className="bg-blue-600 hover:bg-blue-700">Habilitar</Button>
             </div>
           )}
           {sessionState === StreamingAvatarSessionState.CONNECTING && <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50 z-20"><LoadingIcon className="w-10 h-10 animate-spin" /> <span className="ml-2">Conectando...</span></div>}
-          {sessionState === StreamingAvatarSessionState.CONNECTED && <div className="absolute top-2 left-2 bg-black bg-opacity-70 text-white text-sm px-3 py-1 rounded-full z-10">Grabando: {formatTime(recordingTimer)}</div>}
+          {sessionState === StreamingAvatarSessionState.CONNECTED && <div className="absolute top-2 left-2 bg-black bg-opacity-70 text-white text-sm px-3 py-1 rounded-full z-10">Grabando: {timerDisplay}</div>}
         </div>
         <div className="w-full md:w-1/2">
           <video ref={userCameraRef} autoPlay muted playsInline className="rounded-lg border border-blue-500 w-full aspect-video object-cover bg-black" />
@@ -343,12 +358,11 @@ function InteractiveSessionContent() {
   );
 }
 
-// El Wrapper se mantiene igual
 export default function InteractiveSessionWrapper() {
   return (
-    // SOLUCIÓN: Eliminar la prop `basePath` para que el SDK apunte a la API oficial de HeyGen
     <StreamingAvatarProvider>
       <InteractiveSessionContent />
     </StreamingAvatarProvider>
   );
 }
+```
