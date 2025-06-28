@@ -1,5 +1,3 @@
-// app/interactive-session/page.tsx
-
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
@@ -55,17 +53,15 @@ function InteractiveSessionContent() {
   const { startVoiceChat } = useVoiceChat();
 
   const [config, setConfig] = useState<StartAvatarRequest>(DEFAULT_CONFIG);
-  
-  // SOLUCIÓN: Usar refs para datos críticos que se necesitan en callbacks
-  const sessionInfoRef = useRef<{ name: string; email: string; scenario: string; token: string } | null>(null);
-  const recordingTimerRef = useRef<number>(480);
-  
-  const [timerDisplay, setTimerDisplay] = useState('08:00');
+  const [sessionInfo, setSessionInfo] = useState<{ name: string; email: string; scenario: string; token: string; } | null>(null);
   const [showAutoplayBlockedMessage, setShowAutoplayBlockedMessage] = useState(false);
   const [isAttemptingAutoStart, setIsAttemptingAutoStart] = useState(false);
   const [hasUserMediaPermission, setHasUserMediaPermission] = useState(false);
   const [mounted, setMounted] = useState(false);
 
+  const recordingTimerRef = useRef<number>(480);
+  const [timerDisplay, setTimerDisplay] = useState('08:00');
+  
   const messagesRef = useRef<any[]>([]);
   useEffect(() => { messagesRef.current = messages; }, [messages]);
 
@@ -84,23 +80,23 @@ function InteractiveSessionContent() {
     const token = searchParams.get('token');
 
     if (name && email && scenario && token) {
-      // Guardar en la ref para acceso estable en callbacks
-      sessionInfoRef.current = { name, email, scenario, token };
+      setSessionInfo({ name, email, scenario, token });
     } else {
       router.push('/dashboard');
     }
   }, [router, searchParams]);
+
+  // ======================= INICIO DEL BLOQUE CORREGIDO =======================
   
-  const uploadAndLog = useCallback(async (videoBlob: Blob | null, sessionMessages: any[]) => {
-    const sessionInfo = sessionInfoRef.current;
+  const uploadAndLog = useCallback(async (videoBlob: Blob | null) => {
+    // Esta función ahora usa sessionInfo directamente del estado
     if (!sessionInfo) {
       console.error("No hay información de sesión para finalizar.");
-      router.push('/dashboard');
       return;
     }
     
-    const userTranscript = sessionMessages.filter(m => m.sender === MessageSender.CLIENT).map(m => m.content).join('\n');
-    const avatarTranscript = sessionMessages.filter(m => m.sender === MessageSender.AVATAR).map(m => m.content).join('\n');
+    const userTranscript = messagesRef.current.filter(m => m.sender === MessageSender.CLIENT).map(m => m.content).join('\n');
+    const avatarTranscript = messagesRef.current.filter(m => m.sender === MessageSender.AVATAR).map(m => m.content).join('\n');
     const duration = 480 - recordingTimerRef.current;
     const flaskApiUrl = process.env.NEXT_PUBLIC_FLASK_API_URL || '';
     
@@ -143,7 +139,7 @@ function InteractiveSessionContent() {
     } finally {
         router.push('/dashboard');
     }
-  }, [router]);
+  }, [sessionInfo, router]);
 
   const stopAndFinalizeSession = useCallback(async () => {
     if (isFinalizingRef.current) return;
@@ -151,23 +147,21 @@ function InteractiveSessionContent() {
     console.log("🛑 Finalizando sesión...");
     stopAvatar();
 
-    const messagesToLog = [...messagesRef.current];
-
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
         mediaRecorderRef.current.onstop = () => {
             const videoBlob = new Blob(recordedChunks.current, { type: "video/webm" });
-            uploadAndLog(videoBlob, messagesToLog);
+            uploadAndLog(videoBlob);
         };
         mediaRecorderRef.current.stop();
     } else {
-        uploadAndLog(null, messagesToLog);
+        uploadAndLog(null);
     }
     
     if (localUserStreamRef.current) {
         localUserStreamRef.current.getTracks().forEach(track => track.stop());
     }
   }, [stopAvatar, uploadAndLog]);
-  
+
   const startUserCameraRecording = useCallback(() => {
     if (!localUserStreamRef.current || mediaRecorderRef.current) return;
     try {
@@ -184,21 +178,22 @@ function InteractiveSessionContent() {
       mediaRecorderRef.current = recorder;
     } catch (err) { console.error('Error al iniciar MediaRecorder:', err); }
   }, []);
+  // ======================== FIN DEL BLOQUE CORREGIDO =======================
 
   const fetchAccessToken = useCallback(async () => {
     try {
       const response = await fetch("/api/get-access-token", { method: "POST" });
-      if (!response.ok) throw new Error(`Fallo al obtener token de acceso: ${response.status}`);
+      if (!response.ok) throw new Error(`Fallo al obtener token: ${response.status}`);
       return await response.text();
     } catch (error) {
-      console.error("Error obteniendo token de acceso:", error);
+      console.error("Error obteniendo token:", error);
       throw error;
     }
   }, []);
 
   const startHeyGenSession = useCallback(async (startWithVoice: boolean) => {
     if (!hasUserMediaPermission) {
-      alert("Por favor, permite el acceso a la cámara y el micrófono.");
+      alert("Por favor, permite el acceso a la cámara y micrófono.");
       return;
     }
     setIsAttemptingAutoStart(true);
@@ -207,7 +202,7 @@ function InteractiveSessionContent() {
       const avatar = initAvatar(heygenToken);
       
       avatar.on(StreamingEvents.STREAM_DISCONNECTED, () => {
-        if (!isFinalizingRef.current) stopAndFinalizeSession(messagesRef.current);
+        if (!isFinalizingRef.current) stopAndFinalizeSession();
       });
       avatar.on(StreamingEvents.STREAM_READY, () => setIsAttemptingAutoStart(false));
       avatar.on(StreamingEvents.USER_TALKING_MESSAGE, (e) => handleUserTalkingMessage({ detail: e.detail }));
@@ -216,7 +211,7 @@ function InteractiveSessionContent() {
       await startAvatar(config);
       if (startWithVoice) await startVoiceChat();
     } catch (error: any) {
-      console.error("Error iniciando sesión con HeyGen:", error);
+      console.error("Error iniciando sesión:", error);
       setShowAutoplayBlockedMessage(true);
     } finally {
       setIsAttemptingAutoStart(false);
@@ -280,7 +275,7 @@ function InteractiveSessionContent() {
 
   useUnmount(() => {
     if (!isFinalizingRef.current) {
-        stopAndFinalizeSession(messagesRef.current);
+        stopAndFinalizeSession();
     }
   });
   
@@ -302,10 +297,10 @@ function InteractiveSessionContent() {
     );
   }
 
- return (
+  return (
     <div className="w-screen h-screen flex flex-col items-center bg-zinc-900 text-white relative">
       <h1 className="text-3xl font-bold text-blue-400 mt-6 mb-4" suppressHydrationWarning>
-        {`🧠 Leo – ${sessionInfoRef.current?.scenario || 'Cargando...'}`}
+        {`🧠 Leo – ${sessionInfo.scenario}`}
       </h1>
       
       {sessionState === StreamingAvatarSessionState.INACTIVE && !hasUserMediaPermission && !showAutoplayBlockedMessage && (
@@ -337,11 +332,17 @@ function InteractiveSessionContent() {
         </div>
       </div>
 
-     <div className="flex flex-col gap-3 items-center justify-center p-4 border-t border-zinc-700 w-full mt-6">
+      <div className="flex flex-col gap-3 items-center justify-center p-4 border-t border-zinc-700 w-full mt-6">
+        {sessionState === StreamingAvatarSessionState.INACTIVE && !showAutoplayBlockedMessage && (
+          <div className="flex flex-row gap-4">
+            <Button onClick={() => startHeyGenSession(true)} disabled={isAttemptingAutoStart || !hasUserMediaPermission}>Iniciar Chat de Voz</Button>
+            <Button onClick={() => startHeyGenSession(false)} disabled={isAttemptingAutoStart || !hasUserMediaPermission}>Iniciar Chat de Texto</Button>
+          </div>
+        )}
         {sessionState === StreamingAvatarSessionState.CONNECTED && (
           <>
             <AvatarControls />
-            <Button onClick={stopAndFinalizeSession} className="bg-red-600 hover:bg-red-700">Finalizar Sesión</Button>
+            <Button onClick={() => stopAndFinalizeSession(messagesRef.current)} className="bg-red-600 hover:bg-red-700">Finalizar Sesión</Button>
           </>
         )}
       </div>
