@@ -645,18 +645,31 @@ from flask import request, jsonify
 def jwt_required(f):
     @wraps(f)
     def _wrap(*args, **kwargs):
+        # 1) Leer el header Authorization
         auth = request.headers.get("Authorization", "")
-        token = auth.split("Bearer ", 1)[1] if auth.startswith("Bearer ") else None
+        print(f"[🔐 DEBUG JWT] Authorization header completo: {auth!r}")
 
+        # 2) Extraer token
+        token = None
+        if auth.startswith("Bearer "):
+            token = auth.split("Bearer ", 1)[1]
+        print(f"[🔐 DEBUG JWT] Token extraído: {token!r}")
+
+        # 3) Si falta token
         if not token:
+            print("[🔐 DEBUG JWT ERROR] No se encontró token en la cabecera")
             return jsonify(error="token faltante"), 401
 
+        # 4) Intentar decodificarlo
         try:
             payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
+            print(f"[🔐 DEBUG JWT] jwt.decode OK → payload: {payload}")
             request.jwt = payload
-        except Exception:
+        except Exception as e:
+            print(f"[🔐 DEBUG JWT ERROR] jwt.decode falló: {e}")
             return jsonify(error="token inválido o usuario no autorizado"), 401
 
+        # 5) Si todo bien, seguimos
         return f(*args, **kwargs)
     return _wrap
 
