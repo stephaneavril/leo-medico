@@ -81,6 +81,12 @@ function InteractiveSessionContent() {
 
     if (name && email && scenario && token) {
       setSessionInfo({ name, email, scenario, token });
+
+      Cookies.set('jwt',   token, { sameSite: 'Lax' });
+      Cookies.set('user_name',  name,   { sameSite: 'Lax' });
+      Cookies.set('user_email', email,  { sameSite: 'Lax' });
+      Cookies.set('user_token', token,  { sameSite: 'Lax' });
+
     } else {
       router.push('/dashboard');
     }

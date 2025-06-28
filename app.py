@@ -537,11 +537,13 @@ def admin_panel():
 
 # --- app.py ----------------------------------------------------------
 from uuid import uuid4   # arriba del archivo
-import jwt, datetime, os
+import jwt
+import os
+import datetime as dt_module
 
 JWT_SECRET = os.environ["JWT_SECRET"]      # Añádelo en Render
 JWT_ALG    = "HS256"
-FRONTEND_URL = "https://leo-api-ryzd.onrender.com"   # o desde env
+FRONTEND_URL = os.getenv("FRONTEND_URL", "https://leo-api-ryzd.onrender.com")
 
 @app.route("/start-session", methods=["POST"])
 def start_session():
@@ -576,8 +578,8 @@ def start_session():
     "name":     name,
     "email":    email,
     "scenario": scenario,
-    "iat": datetime.datetime.utcnow(),
-    "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=1),  # ⬅️ aquí
+    "iat": dt_module.datetime.utcnow(),
+    "exp": dt_module.datetime.utcnow() + dt_module.timedelta(hours=1),
     }
     token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG)
 
@@ -810,7 +812,7 @@ def log_full_session():
     email            = data.get("email")
     scenario         = data.get("scenario")
     duration         = int(data.get("duration", 0))
-    video_key        = data.get("video_object_key")      # <-- puede ser None
+    video_key        = data.get("video_object_key") or data.get("s3_object_key")
     user_raw         = data.get("conversation", "")
     avatar_raw       = data.get("avatar_transcript", "")
 
@@ -825,8 +827,7 @@ def log_full_session():
     posture_feedback     = data.get("visual_feedback",  "")
 
     # 3) Timestamp estándar ISO-UTC
-    timestamp_iso = datetime.utcnow().isoformat()
-
+    timestamp_iso = datetime.utcnow().isoformat()    
     # 4) Montamos URL S3 completa *solo si* tenemos key
     video_url = (
         f"https://{AWS_S3_BUCKET_NAME}.s3.{AWS_S3_REGION_NAME}.amazonaws.com/{video_key}"
