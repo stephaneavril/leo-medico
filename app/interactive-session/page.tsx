@@ -47,14 +47,8 @@ function InteractiveSessionContent() {
   const searchParams = useSearchParams();
   
   const {
-    initAvatar,
-    startAvatar,
-    stopAvatar,
-    sessionState,
-    stream,
-    messages,
-    handleUserTalkingMessage,
-    handleStreamingTalkingMessage,
+    initAvatar, startAvatar, stopAvatar, sessionState, stream, messages,
+    handleUserTalkingMessage, handleStreamingTalkingMessage
   } = useStreamingAvatarSession();
   const { startVoiceChat } = useVoiceChat();
 
@@ -119,8 +113,6 @@ function InteractiveSessionContent() {
     } catch (err) { console.error('Error al iniciar MediaRecorder:', err); }
   }, []);
   
-  // ======================= INICIO DEL BLOQUE CORREGIDO =======================
-  // La función ahora se define para aceptar el array de mensajes
   const stopAndFinalizeSession = useCallback(async (sessionMessages: any[]) => {
     if (isFinalizingRef.current || !sessionInfo) return;
     isFinalizingRef.current = true;
@@ -179,22 +171,21 @@ function InteractiveSessionContent() {
         router.push('/dashboard');
     }
   }, [sessionInfo, router, stopAvatar, stopUserCameraRecording]);
-  // ======================== FIN DEL BLOQUE CORREGIDO =======================
-
+  
   const fetchAccessToken = useCallback(async () => {
     try {
       const response = await fetch("/api/get-access-token", { method: "POST" });
-      if (!response.ok) throw new Error(`Fallo al obtener token: ${response.status}`);
+      if (!response.ok) throw new Error(`Fallo al obtener token de acceso: ${response.status}`);
       return await response.text();
     } catch (error) {
-      console.error("Error obteniendo token:", error);
+      console.error("Error obteniendo token de acceso:", error);
       throw error;
     }
   }, []);
 
   const startHeyGenSession = useCallback(async (startWithVoice: boolean) => {
     if (!hasUserMediaPermission) {
-      alert("Por favor, permite el acceso a la cámara y micrófono.");
+      alert("Por favor, permite el acceso a la cámara y el micrófono.");
       return;
     }
     setIsAttemptingAutoStart(true);
@@ -212,7 +203,7 @@ function InteractiveSessionContent() {
       await startAvatar(config);
       if (startWithVoice) await startVoiceChat();
     } catch (error: any) {
-      console.error("Error iniciando sesión:", error);
+      console.error("Error iniciando sesión con HeyGen:", error);
       setShowAutoplayBlockedMessage(true);
     } finally {
       setIsAttemptingAutoStart(false);
