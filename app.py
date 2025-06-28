@@ -16,6 +16,7 @@ from botocore.exceptions import ClientError
 import re
 from flask import Flask, request, jsonify, send_file, redirect  # y lo que ya tuvieras
 app = Flask(__name__)
+
 CORS(
   app,
   resources={r"/*": {"origins": ["http://localhost:3000", "https://leo-api-ryzd.onrender.com"]}},
@@ -107,14 +108,6 @@ app = Flask(
 )
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
 print(f"DEBUG_FRONTEND_URL = {FRONTEND_URL}")
-
-CORS(
-  app,
-  origins=["https://leo-api-ryzd.onrender.com"],
-  methods=["GET","POST","OPTIONS"],
-  allow_headers=["Content-Type","Authorization"],
-  supports_credentials=True
-)
 
 @app.before_request
 def log_request_info():

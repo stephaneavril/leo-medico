@@ -80,92 +80,51 @@ function InteractiveSessionContent() {
   const avatarVideoRef = useRef<HTMLVideoElement>(null);
   const isFinalizingRef = useRef(false);
 
-  // ========== CORRECCIÓN #1: LEER DATOS DE SESIÓN EN useEffect ==========
-  // Esto soluciona el "React error #418" al asegurar que el código solo se ejecute en el navegador.
-  useEffect(() => {
-    setMounted(true); // Indica que el componente ya está en el cliente
-    const name = searchParams.get('name') 
-    const email = searchParams.get('email') 
-    const scenario = searchParams.get('scenario') 
-    const token = searchParams.get('token') 
+   useEffect(() => {
+    setMounted(true);
+    const name = searchParams.get('name');
+    const email = searchParams.get('email');
+    const scenario = searchParams.get('scenario');
 
-    if (name && email && scenario && token) {
-      setSessionInfo({ name, email, scenario, token });
+    if (name && email && scenario) {
+      setSessionInfo({ name, email, scenario });
     } else {
+      console.warn("Faltan datos de sesión en la URL, redirigiendo al dashboard.");
       router.push('/dashboard');
     }
   }, [router, searchParams]);
 
-  const stopUserCameraRecording = useCallback(() => {
-    if (localUserStreamRef.current) {
-      localUserStreamRef.current.getTracks().forEach(track => track.stop());
-      localUserStreamRef.current = null;
-    }
-    if (userCameraRef.current) {
-      userCameraRef.current.srcObject = null;
-    }
-  }, []);
-
-  const startUserCameraRecording = useCallback(() => {
-    if (!localUserStreamRef.current || mediaRecorderRef.current) return;
-    try {
-      const recorder = new MediaRecorder(localUserStreamRef.current, {
-        mimeType: 'video/webm; codecs=vp8',
-        videoBitsPerSecond: 2500000,
-        audioBitsPerSecond: 128000
-      });
-      recordedChunks.current = [];
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) recordedChunks.current.push(e.data);
-      };
-      recorder.onerror = (ev: Event) => {
-        const err = (ev as any).error;
-        if (err) console.error("🎥 MediaRecorder ERROR:", err);
-      };
-      recorder.start();
-      mediaRecorderRef.current = recorder;
-    } catch (err) { console.error('Error al iniciar MediaRecorder:', err); }
-  }, []);
-
-  const stopAndFinalizeSession = useCallback(async (sessionMessages: any[]) => {
+  const stopAndFinalizeSession = useCallback(async () => {
     if (isFinalizingRef.current || !sessionInfo) return;
     isFinalizingRef.current = true;
     console.log("🛑 Finalizando sesión...");
     stopAvatar();
 
-    let finalVideoBlob: Blob | null = null;
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
-        const recorder = mediaRecorderRef.current;
-        await new Promise<void>(resolve => {
-            recorder.onstop = () => resolve();
-            recorder.stop();
-        });
-        if (recordedChunks.current.length > 0) {
-            finalVideoBlob = new Blob(recordedChunks.current, { type: "video/webm" });
-        }
+        mediaRecorderRef.current.stop();
     }
-    stopUserCameraRecording();
+    if (localUserStreamRef.current) {
+        localUserStreamRef.current.getTracks().forEach(track => track.stop());
+    }
 
-    const userTranscript = sessionMessages.filter(m => m.sender === MessageSender.CLIENT).map(m => m.content).join('\n');
-    const avatarTranscript = sessionMessages.filter(m => m.sender === MessageSender.AVATAR).map(m => m.content).join('\n');
+    const userTranscript = messagesRef.current.filter(m => m.sender === MessageSender.CLIENT).map(m => m.content).join('\n');
+    const avatarTranscript = messagesRef.current.filter(m => m.sender === MessageSender.AVATAR).map(m => m.content).join('\n');
     const duration = 480 - recordingTimer;
     const flaskApiUrl = process.env.NEXT_PUBLIC_FLASK_API_URL || '';
-    let videoS3Key: string | null = null;
-
+    
     try {
-      if (finalVideoBlob) {
+      let videoS3Key: string | null = null;
+      const videoBlob = new Blob(recordedChunks.current, { type: "video/webm" });
+      
+      if (videoBlob.size > 0) {
           const videoFormData = new FormData();
-          videoFormData.append('video', finalVideoBlob, "user_recording.webm");
-          videoFormData.append('name', sessionInfo.name);
-          videoFormData.append('email', sessionInfo.email);
-
-          // ========== CORRECCIÓN #2: AÑADIR EL TOKEN JWT AL SUBIR EL VIDEO ==========
-          // Esto soluciona el error "401 Unauthorized" que viste en la consola.
+          videoFormData.append('video', videoBlob, "user_recording.webm");
+          
           const jwt = Cookies.get('jwt');
-          const headers: HeadersInit = {};
-          if (jwt) {
-              headers['Authorization'] = `Bearer ${jwt}`;
-          }
+          if (!jwt) throw new Error("Token JWT no encontrado. La subida de video requiere autenticación.");
+
+          const headers = new Headers();
+          headers.append('Authorization', `Bearer ${jwt}`);
 
           const uploadRes = await fetch(`${flaskApiUrl}/upload_video`, {
               method: "POST",
@@ -174,8 +133,8 @@ function InteractiveSessionContent() {
           });
 
           if (!uploadRes.ok) {
-              const errorText = await uploadRes.text();
-              throw new Error(`Error al subir video: ${uploadRes.status} ${errorText}`);
+              const errorData = await uploadRes.json();
+              throw new Error(`Error al subir video: ${uploadRes.status} - ${errorData.error || 'Error desconocido'}`);
           }
           const uploadData = await uploadRes.json();
           videoS3Key = uploadData.s3_object_key;
@@ -185,23 +144,18 @@ function InteractiveSessionContent() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          name: sessionInfo.name,
-          email: sessionInfo.email,
-          scenario: sessionInfo.scenario,
-          conversation: userTranscript,
-          avatar_transcript: avatarTranscript,
-          duration: duration,
-          video_object_key: videoS3Key
+          name: sessionInfo.name, email: sessionInfo.email, scenario: sessionInfo.scenario,
+          conversation: userTranscript, avatar_transcript: avatarTranscript,
+          duration: duration, video_object_key: videoS3Key
         })
       });
-
     } catch (err: any) {
-        console.error("❌ Error en la finalización de la sesión:", err.message);
+        console.error("❌ Error en la finalización de la sesión:", err);
         alert(`⚠️ Ocurrió un error al guardar la sesión: ${err.message}`);
     } finally {
         router.push('/dashboard');
     }
-  }, [stopAvatar, stopUserCameraRecording, recordingTimer, sessionInfo, router]);
+  }, [stopAvatar, sessionInfo, router, recordingTimer]);
 
   const fetchAccessToken = useCallback(async () => {
     try {
