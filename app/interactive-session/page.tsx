@@ -1,11 +1,11 @@
-// File: app/interactive-session/page.tsx
+// app/interactive-session/page.tsx
 
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useUnmount } from 'ahooks';
 import { useRouter, useSearchParams } from 'next/navigation';
-import Cookies from 'js-cookie';
+import Cookies from 'js-cookie'; // Asegúrate de que js-cookie esté instalado
 
 import {
   AvatarQuality,
