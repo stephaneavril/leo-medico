@@ -388,7 +388,8 @@ function InteractiveSessionContent() {
 // El Wrapper se mantiene igual
 export default function InteractiveSessionWrapper() {
   return (
-    <StreamingAvatarProvider basePath={process.env.NEXT_PUBLIC_FLASK_API_URL || ''}>
+    // SOLUCIÓN: Eliminar la prop `basePath` para que el SDK apunte a la API oficial de HeyGen
+    <StreamingAvatarProvider>
       <InteractiveSessionContent />
     </StreamingAvatarProvider>
   );

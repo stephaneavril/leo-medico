@@ -16,6 +16,7 @@ from botocore.exceptions import ClientError
 import re
 from flask import Flask, request, jsonify, send_file, redirect  # y lo que ya tuvieras
 app = Flask(__name__)
+CORS(app, resources={r"/*": {"origins": "*"}})
 
 print("\U0001F680 Iniciando Leo Virtual Trainer (Modo Simple)...")
 
