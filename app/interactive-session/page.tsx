@@ -144,19 +144,35 @@ const stopAndFinalizeSession = useCallback((sessionMessages: any[]) => {
         // 3) Subir vídeo
         let videoS3Key: string | null = null;
         const videoBlob = new Blob(recordedChunks.current, { type: "video/webm" });
-        if (videoBlob.size > 0) {
-          const form = new FormData();
-          form.append('video', videoBlob, 'user_recording.webm');
-          const jwt = Cookies.get('jwt')!;
-          const uploadRes = await fetch(`${flaskApiUrl}/upload_video`, {
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${jwt}` },
-            body: form
-          });
-          const uploadData = await uploadRes.json();
-          videoS3Key = uploadData.s3_object_key;
-        }
+if (videoBlob.size > 0) {
+  const form = new FormData();
+  form.append('video', videoBlob, 'user_recording.webm');
+  const jwt = Cookies.get('jwt')!;
 
+  console.log('[API] Subiendo video a:', flaskApiUrl);
+  console.log('[API] JWT upload_video:', jwt);
+
+  const uploadRes = await fetch(`${flaskApiUrl}/upload_video`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${jwt}` },
+    body: form,
+  });
+
+  console.log('[API] upload_video status:', uploadRes.status);
+  // parseamos UNA sola vez:
+  const uploadJson = await uploadRes.json();
+  console.log('[API] upload_video response JSON:', uploadJson);
+
+  if (!uploadRes.ok) {
+    // mostramos mensaje de error detallado
+    throw new Error(
+      `Upload error ${uploadRes.status}: ` +
+      (uploadJson.error || uploadJson.message || JSON.stringify(uploadJson))
+    );
+  }
+
+  videoS3Key = uploadJson.s3_object_key;
+}
         // 4) Log de sesión
         await fetch(`${flaskApiUrl}/log_full_session`, {
           method: 'POST',
