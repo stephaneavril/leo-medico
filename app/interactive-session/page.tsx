@@ -1,4 +1,4 @@
-// File: app/interactive-session/page.tsx (VERSIÓN COMPLETA, CORRECTA Y FINAL)
+// File: app/interactive-session/page.tsx (VERSIÓN FINAL Y VERIFICADA)
 
 'use client';
 
@@ -61,6 +61,8 @@ function InteractiveSessionContent() {
   const [isAttemptingAutoStart, setIsAttemptingAutoStart] = useState(false);
   const [recordingTimer, setRecordingTimer] = useState(480);
   const [hasUserMediaPermission, setHasUserMediaPermission] = useState(false);
+  const [mounted, setMounted] = useState(false);
+
 
   // --- REFS ---
   const messagesRef = useRef<any[]>([]);
@@ -73,9 +75,10 @@ function InteractiveSessionContent() {
   const avatarVideoRef = useRef<HTMLVideoElement>(null);
   const isFinalizingRef = useRef(false);
 
-  // ========== CORRECCIÓN #1: LEER DATOS DE SESIÓN DENTRO DE useEffect ==========
-  // Esto soluciona el "React error #418" (error de hidratación)
+  // ========== CORRECCIÓN #1: LEER DATOS DE SESIÓN EN useEffect ==========
+  // Esto soluciona el error de React #418 y evita el renderizado inconsistente.
   useEffect(() => {
+    setMounted(true);
     const name = searchParams.get('name') || Cookies.get('user_name');
     const email = searchParams.get('email') || Cookies.get('user_email');
     const scenario = searchParams.get('scenario') || Cookies.get('user_scenario');
@@ -130,7 +133,10 @@ function InteractiveSessionContent() {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
         const recorder = mediaRecorderRef.current;
         await new Promise<void>(resolve => {
-            recorder.onstop = () => resolve();
+            recorder.onstop = () => {
+                console.log("🎥 MediaRecorder: onstop event fired.");
+                resolve();
+            };
             recorder.stop();
         });
         if (recordedChunks.current.length > 0) {
@@ -154,7 +160,7 @@ function InteractiveSessionContent() {
           videoFormData.append('email', sessionInfo.email);
 
           // ========== CORRECCIÓN #2: AÑADIR EL TOKEN JWT AL SUBIR EL VIDEO ==========
-          // Esto soluciona el error "401 Unauthorized" / "token faltante".
+          // Esto soluciona el error 401 Unauthorized.
           const jwt = Cookies.get('jwt');
           const headers: HeadersInit = {};
           if (jwt) {
@@ -163,7 +169,7 @@ function InteractiveSessionContent() {
 
           const uploadRes = await fetch(`${flaskApiUrl}/upload_video`, {
               method: "POST",
-              headers: headers,
+              headers: headers, // Añadimos el header de autorización
               body: videoFormData,
           });
 
@@ -224,6 +230,8 @@ function InteractiveSessionContent() {
       avatar.on(StreamingEvents.STREAM_READY, () => setIsAttemptingAutoStart(false));
       avatar.on(StreamingEvents.USER_TALKING_MESSAGE, (e) => handleUserTalkingMessage({ detail: e.detail }));
       avatar.on(StreamingEvents.AVATAR_TALKING_MESSAGE, (e) => handleStreamingTalkingMessage({ detail: e.detail }));
+      avatar.on(StreamingEvents.USER_END_MESSAGE, (event) => handleUserTalkingMessage({ detail: event.detail }));
+      avatar.on(StreamingEvents.AVATAR_END_MESSAGE, (event) => handleStreamingTalkingMessage({ detail: event.detail }));
 
       await startAvatar(config);
       if (startWithVoice) await startVoiceChat();
@@ -308,7 +316,7 @@ function InteractiveSessionContent() {
     }
   }
 
-  if (!sessionInfo) {
+  if (!mounted || !sessionInfo) {
     return (
         <div className="w-screen h-screen flex flex-col items-center justify-center bg-zinc-900 text-white">
             <LoadingIcon className="w-10 h-10 animate-spin" />
@@ -319,7 +327,9 @@ function InteractiveSessionContent() {
 
   return (
     <div className="w-screen h-screen flex flex-col items-center bg-zinc-900 text-white relative">
-      <h1 className="text-3xl font-bold text-blue-400 mt-6 mb-4">{`🧠 Leo – ${sessionInfo.scenario}`}</h1>
+      <h1 className="text-3xl font-bold text-blue-400 mt-6 mb-4" suppressHydrationWarning>
+        🧠 Leo – {sessionInfo.scenario || "Cargando..."}
+      </h1>
       
       {sessionState === StreamingAvatarSessionState.INACTIVE && !hasUserMediaPermission && !showAutoplayBlockedMessage && (
         <p className="text-zinc-300 mb-6">Solicitando permisos para cámara y micrófono...</p>
@@ -354,6 +364,7 @@ function InteractiveSessionContent() {
         {sessionState === StreamingAvatarSessionState.INACTIVE && !showAutoplayBlockedMessage && (
           <div className="flex flex-row gap-4">
             <Button onClick={() => startHeyGenSession(true)} disabled={isAttemptingAutoStart || !hasUserMediaPermission}>Iniciar Chat de Voz</Button>
+            <Button onClick={() => startHeyGenSession(false)} disabled={isAttemptingAutoStart || !hasUserMediaPermission}>Iniciar Chat de Texto</Button>
           </div>
         )}
         {sessionState === StreamingAvatarSessionState.CONNECTED && (
