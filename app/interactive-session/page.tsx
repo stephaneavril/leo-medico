@@ -1,4 +1,4 @@
-// File: app/interactive-session/page.tsx (VERSIÓN COMPLETA Y CORREGIDA)
+// File: app/interactive-session/page.tsx
 
 'use client';
 
@@ -48,27 +48,31 @@ function InteractiveSessionContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   
-  // --- Estado para la información de la sesión ---
-  // Se inicializa como null y se llena en un useEffect para evitar errores de hidratación.
-  const [sessionInfo, setSessionInfo] = useState<{ name: string; email: string; scenario: string; token: string } | null>(null);
-
   const {
-    initAvatar, startAvatar, stopAvatar, sessionState, stream, messages,
-    handleUserTalkingMessage, handleStreamingTalkingMessage,
+    initAvatar,
+    startAvatar,
+    stopAvatar,
+    sessionState,
+    stream,
+    messages,
+    handleUserTalkingMessage,
+    handleStreamingTalkingMessage,
   } = useStreamingAvatarSession();
   const { startVoiceChat } = useVoiceChat();
 
-  // --- Otros estados ---
   const [config, setConfig] = useState<StartAvatarRequest>(DEFAULT_CONFIG);
+  const [sessionInfo, setSessionInfo] = useState<{ name: string; email: string; scenario: string; token: string } | null>(null);
   const [showAutoplayBlockedMessage, setShowAutoplayBlockedMessage] = useState(false);
   const [isAttemptingAutoStart, setIsAttemptingAutoStart] = useState(false);
   const [recordingTimer, setRecordingTimer] = useState(480);
   const [hasUserMediaPermission, setHasUserMediaPermission] = useState(false);
-  
-  // --- REFS ---
+  const [mounted, setMounted] = useState(false);
+
   const messagesRef = useRef<any[]>([]);
-  useEffect(() => { messagesRef.current = messages; }, [messages]);
-  
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordedChunks = useRef<Blob[]>([]);
   const localUserStreamRef = useRef<MediaStream | null>(null);
@@ -76,9 +80,10 @@ function InteractiveSessionContent() {
   const avatarVideoRef = useRef<HTMLVideoElement>(null);
   const isFinalizingRef = useRef(false);
 
-  // ========== CORRECCIÓN #1: LEER PARÁMETROS Y COOKIES DE FORMA SEGURA ==========
-  // Se ejecuta solo en el navegador para evitar el error de hidratación (React error #418).
+  // ========== CORRECCIÓN #1: LEER DATOS DE SESIÓN EN useEffect ==========
+  // Esto soluciona el "React error #418" al asegurar que el código solo se ejecute en el navegador.
   useEffect(() => {
+    setMounted(true); // Indica que el componente ya está en el cliente
     const name = searchParams.get('name') || Cookies.get('user_name');
     const email = searchParams.get('email') || Cookies.get('user_email');
     const scenario = searchParams.get('scenario') || Cookies.get('user_scenario');
@@ -87,7 +92,7 @@ function InteractiveSessionContent() {
     if (name && email && scenario && token) {
       setSessionInfo({ name, email, scenario, token });
     } else {
-      console.error("Faltan datos de sesión, redirigiendo...");
+      console.error("Faltan datos de sesión, redirigiendo al dashboard...");
       router.push('/dashboard');
     }
   }, [searchParams, router]);
@@ -108,11 +113,15 @@ function InteractiveSessionContent() {
       const recorder = new MediaRecorder(localUserStreamRef.current, {
         mimeType: 'video/webm; codecs=vp8',
         videoBitsPerSecond: 2500000,
-        audioBitsPerSecond: 128000,
+        audioBitsPerSecond: 128000
       });
       recordedChunks.current = [];
       recorder.ondataavailable = (e) => {
         if (e.data.size > 0) recordedChunks.current.push(e.data);
+      };
+      recorder.onerror = (ev: Event) => {
+        const err = (ev as any).error;
+        if (err) console.error("🎥 MediaRecorder ERROR:", err);
       };
       recorder.start();
       mediaRecorderRef.current = recorder;
@@ -122,6 +131,7 @@ function InteractiveSessionContent() {
   const stopAndFinalizeSession = useCallback(async (sessionMessages: any[]) => {
     if (isFinalizingRef.current || !sessionInfo) return;
     isFinalizingRef.current = true;
+    console.log("🛑 Finalizando sesión...");
     stopAvatar();
 
     let finalVideoBlob: Blob | null = null;
@@ -160,7 +170,7 @@ function InteractiveSessionContent() {
 
           const uploadRes = await fetch(`${flaskApiUrl}/upload_video`, {
               method: "POST",
-              headers: headers, // Se añade el header de autorización
+              headers: headers,
               body: videoFormData,
           });
 
@@ -176,9 +186,13 @@ function InteractiveSessionContent() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          name: sessionInfo.name, email: sessionInfo.email, scenario: sessionInfo.scenario,
-          conversation: userTranscript, avatar_transcript: avatarTranscript,
-          duration: duration, video_object_key: videoS3Key
+          name: sessionInfo.name,
+          email: sessionInfo.email,
+          scenario: sessionInfo.scenario,
+          conversation: userTranscript,
+          avatar_transcript: avatarTranscript,
+          duration: duration,
+          video_object_key: videoS3Key
         })
       });
 
@@ -210,6 +224,7 @@ function InteractiveSessionContent() {
     try {
       const heygenToken = await fetchAccessToken();
       const avatar = initAvatar(heygenToken);
+      
       avatar.on(StreamingEvents.STREAM_DISCONNECTED, () => {
         if (!isFinalizingRef.current) stopAndFinalizeSession(messagesRef.current);
       });
@@ -302,18 +317,20 @@ function InteractiveSessionContent() {
     }
   }
 
-  if (!sessionInfo) {
+  if (!mounted || !sessionInfo) {
     return (
-      <div className="w-screen h-screen flex flex-col items-center justify-center bg-zinc-900 text-white">
-        <LoadingIcon className="w-10 h-10 animate-spin" />
-        <p className="mt-4">Cargando datos de sesión...</p>
-      </div>
+        <div className="w-screen h-screen flex flex-col items-center justify-center bg-zinc-900 text-white">
+            <LoadingIcon className="w-10 h-10 animate-spin" />
+            <p className="mt-4">Cargando datos de sesión...</p>
+        </div>
     );
   }
 
   return (
     <div className="w-screen h-screen flex flex-col items-center bg-zinc-900 text-white relative">
-      <h1 className="text-3xl font-bold text-blue-400 mt-6 mb-4">{`🧠 Leo – ${sessionInfo.scenario}`}</h1>
+      <h1 className="text-3xl font-bold text-blue-400 mt-6 mb-4" suppressHydrationWarning>
+        {`🧠 Leo – ${sessionInfo.scenario || "Cargando..."}`}
+      </h1>
       
       {sessionState === StreamingAvatarSessionState.INACTIVE && !hasUserMediaPermission && !showAutoplayBlockedMessage && (
         <p className="text-zinc-300 mb-6">Solicitando permisos para cámara y micrófono...</p>
