@@ -84,18 +84,17 @@ function InteractiveSessionContent() {
   // Esto soluciona el "React error #418" al asegurar que el código solo se ejecute en el navegador.
   useEffect(() => {
     setMounted(true); // Indica que el componente ya está en el cliente
-    const name = searchParams.get('name') || Cookies.get('user_name');
-    const email = searchParams.get('email') || Cookies.get('user_email');
-    const scenario = searchParams.get('scenario') || Cookies.get('user_scenario');
-    const token = searchParams.get('token') || Cookies.get('user_token');
+    const name = searchParams.get('name') 
+    const email = searchParams.get('email') 
+    const scenario = searchParams.get('scenario') 
+    const token = searchParams.get('token') 
 
     if (name && email && scenario && token) {
       setSessionInfo({ name, email, scenario, token });
     } else {
-      console.error("Faltan datos de sesión, redirigiendo al dashboard...");
       router.push('/dashboard');
     }
-  }, [searchParams, router]);
+  }, [router, searchParams]);
 
   const stopUserCameraRecording = useCallback(() => {
     if (localUserStreamRef.current) {

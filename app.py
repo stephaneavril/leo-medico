@@ -16,7 +16,13 @@ from botocore.exceptions import ClientError
 import re
 from flask import Flask, request, jsonify, send_file, redirect  # y lo que ya tuvieras
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*"}})
+CORS(
+  app,
+  resources={r"/*": {"origins": ["http://localhost:3000", "https://leo-api-ryzd.onrender.com"]}},
+  methods=["GET", "POST", "OPTIONS"],
+  allow_headers=["Content-Type", "Authorization"],
+  supports_credentials=True
+)
 
 print("\U0001F680 Iniciando Leo Virtual Trainer (Modo Simple)...")
 
@@ -748,33 +754,27 @@ def serve_video(filename):
     return redirect(presigned, code=302)
 
 @app.route('/upload_video', methods=['POST'])
-@cross_origin()
 @jwt_required
 def upload_video():
+    # ... tu lógica actual es correcta aquí, ya que usa el token del decorador
     email = request.jwt["email"]
     video_file = request.files.get('video')
-    name = request.form.get('name')
-    email = request.form.get('email')
 
-    if not video_file or not name or not email:
-        return jsonify({'status': 'error', 'message': 'Faltan datos (video, nombre o correo).'}), 400
+    if not video_file:
+        return jsonify({'status': 'error', 'message': 'Falta el archivo de video.'}), 400
 
-    filename = secure_filename(f"{email}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.webm")
-    local_path = os.path.join(TEMP_PROCESSING_FOLDER, filename)
-    os.makedirs(TEMP_PROCESSING_FOLDER, exist_ok=True)
-    video_file.save(local_path)
-
+    filename = secure_filename(f"{email.replace('@', '_at_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.webm")
+    local_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+    
     try:
+        video_file.save(local_path)
         s3_key = filename
         s3_url = upload_file_to_s3(local_path, AWS_S3_BUCKET_NAME, s3_key)
         if not s3_url:
-            raise Exception("No se pudo subir el archivo a S3.")
-
-        print(f"[S3] Subido a: {s3_url}")
-
-        return jsonify({'status': 'ok', 'video_url': s3_url, 's3_object_key': s3_key})
+            raise Exception("Fallo en la subida a S3.")
+        return jsonify({'status': 'ok', 's3_object_key': s3_key})
     except Exception as e:
-        print(f"[ERROR] upload_video: {e}")
+        app.logger.error(f"Error en upload_video: {e}")
         return jsonify({'status': 'error', 'message': str(e)}), 500
     finally:
         if os.path.exists(local_path):
