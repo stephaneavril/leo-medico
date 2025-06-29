@@ -58,8 +58,6 @@ function InteractiveSessionContent() {
   const [showAutoplayBlockedMessage, setShowAutoplayBlockedMessage] = useState(false);
   const [isAttemptingAutoStart, setIsAttemptingAutoStart] = useState(false);
   const [hasUserMediaPermission, setHasUserMediaPermission] = useState(false);
-  
-  // 🔥 CORRECCIÓN CLAVE: Estado 'mounted' para prevenir error de hidratación #418
   const [mounted, setMounted] = useState(false);
 
   const recordingTimerRef = useRef<number>(480);
@@ -76,22 +74,25 @@ function InteractiveSessionContent() {
   const isFinalizingRef = useRef(false);
 
   useEffect(() => {
-    // Marcamos el componente como "montado" en el cliente.
     setMounted(true);
+  }, []);
 
-    const name = searchParams.get('name');
-    const email = searchParams.get('email');
-    const scenario = searchParams.get('scenario');
-    const token = searchParams.get('token');
+  useEffect(() => {
+    if (mounted) {
+      const name = searchParams.get('name');
+      const email = searchParams.get('email');
+      const scenario = searchParams.get('scenario');
+      const token = searchParams.get('token');
 
-    if (name && email && scenario && token) {
-      sessionInfoRef.current = { name, email, scenario, token };
-      setUiState({ scenario });
-    } else {
-      console.error("Faltan parámetros en la URL. Redirigiendo...");
-      router.push('/dashboard');
+      if (name && email && scenario && token) {
+        sessionInfoRef.current = { name, email, scenario, token };
+        setUiState({ scenario });
+      } else {
+        console.error("Faltan parámetros en la URL. Redirigiendo...");
+        router.push('/dashboard');
+      }
     }
-  }, [router, searchParams]);
+  }, [mounted, router, searchParams]);
   
   const stopUserCameraRecording = useCallback(() => {
     if (localUserStreamRef.current) {
@@ -307,7 +308,6 @@ function InteractiveSessionContent() {
     }
   }
 
-  // 🔥 CORRECCIÓN: No renderizar el contenido principal hasta que el componente esté montado
   if (!mounted) {
     return (
         <div className="w-screen h-screen flex flex-col items-center justify-center bg-zinc-900 text-white">
