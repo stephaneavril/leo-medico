@@ -66,7 +66,7 @@ export default function DashboardClient({ initialData, error }: { initialData: D
   };
 
   const maxSeconds = 1800;
-  const defaultScenario = "Entrevista con el médico";
+  const defaultScenario = "Coaching con gerente";
 
   return (
     <div className="dashboard-page-container">
@@ -126,8 +126,7 @@ export default function DashboardClient({ initialData, error }: { initialData: D
               <button>Iniciar</button>
             </Link>
           </div>
-          <div className="card"><h3>Coaching</h3><button disabled>Muy pronto</button></div>
-          <div className="card"><h3>Capacitación</h3><button disabled>Muy pronto</button></div>
+          <div className="card"><h3>Coaching</h3></div>
         </div>
         <div className="info">
           <strong>⏱ Tiempo mensual utilizado:</strong>

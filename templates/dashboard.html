@@ -117,12 +117,12 @@ export default function DashboardPage() {
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
           <div className="card bg-zinc-800 rounded-lg p-6 shadow-md text-center">
-            <h3 className="text-xl font-semibold text-blue-300 mb-3">Entrevista con médico</h3>
+            <h3 className="text-xl font-semibold text-blue-300 mb-3">Coaching con gerente</h3>
             {email && token && (
               <Link
                 href={{
                   pathname: '/interactive-session',
-                  query: { name: name!, email: email!, scenario: 'Entrevista con médico', token: token! },
+                  query: { name: name!, email: email!, scenario: 'coaching con gerente', token: token! },
                 }}
                 className="inline-block bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-6 rounded-lg transition duration-200"
               >
@@ -131,25 +131,9 @@ export default function DashboardPage() {
             )}
           </div>
 
-          <div className="card bg-zinc-800 rounded-lg p-6 shadow-md text-center opacity-60 cursor-not-allowed">
-            <h3 className="text-xl font-semibold text-zinc-400 mb-3">Coaching para representante</h3>
-            <button
-              disabled
-              className="w-full bg-zinc-600 text-zinc-300 font-semibold py-3 px-6 rounded-lg"
-            >
-              Muy pronto
-            </button>
-          </div>
+         
 
-          <div className="card bg-zinc-800 rounded-lg p-6 shadow-md text-center opacity-60 cursor-not-allowed">
-            <h3 className="text-xl font-semibold text-zinc-400 mb-3">Capacitación farmacéutico</h3>
-            <button
-              disabled
-              className="w-full bg-zinc-600 text-zinc-300 font-semibold py-3 px-6 rounded-lg"
-            >
-              Muy pronto
-            </button>
-          </div>
+        
         </div>
 
         <div className="info bg-zinc-800 p-4 rounded-lg shadow-md border-l-4 border-blue-600">

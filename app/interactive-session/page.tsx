@@ -29,8 +29,8 @@ import { MessageHistory } from '@/components/AvatarSession/MessageHistory';
 
 const DEFAULT_CONFIG: StartAvatarRequest = {
   quality: AvatarQuality.Low,
-  avatarName: 'Ann_Doctor_Standing2_public',
-  knowledgeId: '13f254b102cf436d8c07b9fb617dbadf',
+  avatarName: 'Bryan_FitnessCoach_public',
+  knowledgeId: 'b3227c3440c446089e0d5661c8aabe65',
   language: 'es',
   voice: {
     rate: 1.5,

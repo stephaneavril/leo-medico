@@ -31,6 +31,6 @@ services:
     startCommand: "npm run start"
     envVars:
       - key: NEXT_PUBLIC_FLASK_API_URL
-        value: "https://leo-api-ryzd.onrender.com"
+        value: "https://leo-dm-frontend.onrender.com"
       - key: NODE_ENV 
         value: "production" 
