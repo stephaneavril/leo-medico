@@ -197,22 +197,29 @@
             <strong>Fecha:</strong> {{ row[7] }}
           </p>
 
-          <!-- CHAT -->
-          <div class="chat-log">
-            <p><strong>👤 Usuario:</strong></p>
-            <ul>
-              {% for segment in row[4] if segment.strip() %}
-                <li class="user"><span class="bubble">{{ segment }}</span></li>
-              {% endfor %}
-            </ul>
+          <!-- CHAT – intercalado -->
+<div class="chat-log">
+  {% set u = row[4] %}
+  {% set d = row[5] %}
+  {% set max_len = [u|length, d|length]|max %}
 
-            <p style="margin-top:8px"><strong>🩺 Doctora:</strong></p>
-            <ul>
-              {% for segment in row[5] if segment.strip() %}
-                <li class="doctor"><span class="bubble">{{ segment }}</span></li>
-              {% endfor %}
-            </ul>
-          </div>
+  <ul>
+    {% for i in range(max_len) %}
+      {#   orden natural: User(i) → Doctor(i)  #}
+      {% if u[i] is defined and u[i]|trim %}
+        <li class="user">
+          <span class="bubble">{{ u[i]|trim }}</span>
+        </li>
+      {% endif %}
+
+      {% if d[i] is defined and d[i]|trim %}
+        <li class="doctor">
+          <span class="bubble">{{ d[i]|trim }}</span>
+        </li>
+      {% endif %}
+    {% endfor %}
+  </ul>
+</div>
 
           <!-- RESÚMENES -->
           <div class="evaluation">
