@@ -266,7 +266,7 @@ def create_user():
                 cur.execute(
                     """
                     INSERT INTO users (name,email,start_date,end_date,active,token)
-                    VALUES (%s,%s,%s,%s,TRUE,%s)
+                    VALUES (%s,%s,%s,%s,1,%s)
                     RETURNING id
                     """,
                     (
@@ -287,7 +287,7 @@ def create_user():
         }), 201
     finally:
         conn.close()
-        
+
 # helpers.py  (o dentro de app.py)
 
 from datetime import date
