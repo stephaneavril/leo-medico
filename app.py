@@ -229,6 +229,65 @@ def upload_file_to_s3(file_path, bucket, object_name=None):
         print(f"[S3 ERROR] Falló la subida a S3: {e}")
         return None
 
+from datetime import datetime, timedelta, date
+import jwt, psycopg2.extras
+
+JWT_SECRET = os.getenv("JWT_SECRET", "dev-secret")   # ya lo usas en login
+JWT_ALG    = "HS256"
+
+def issue_jwt(payload: dict, days: int = 7) -> str:
+    """Firma un JWT HS256 que caduca en <days> días."""
+    payload = payload.copy()
+    payload.update({
+        "iat": datetime.utcnow(),
+        "exp": datetime.utcnow() + timedelta(days=days)
+    })
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG)
+
+@app.post("/admin/users")
+def create_user():
+    """Crea usuario (token nuevo) o devuelve el existente."""
+    data  = request.get_json(force=True)           # {name,email}
+    name  = data.get("name","").strip()
+    email = data.get("email","").strip().lower()
+    if not name or not email:
+        return "falta nombre o email", 400
+
+    conn = get_db_connection()                     # tu helper ya existe
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute("SELECT id, token FROM users WHERE email=%s", (email,))
+            row = cur.fetchone()
+
+            if row:                                # ya existe
+                user_id, token = row["id"], row["token"]
+            else:                                  # crear
+                token = issue_jwt({"name": name, "email": email})
+                cur.execute(
+                    """
+                    INSERT INTO users (name,email,start_date,end_date,active,token)
+                    VALUES (%s,%s,%s,%s,TRUE,%s)
+                    RETURNING id
+                    """,
+                    (
+                        name, email,
+                        date.today(),                       # start_date
+                        date.today() + timedelta(days=365), # end_date = 1 año
+                        token
+                    )
+                )
+                user_id = cur.fetchone()[0]
+            conn.commit()
+
+        return jsonify({
+            "user_id":    user_id,
+            "token":      token,
+            "date_from":  date.today().isoformat(),
+            "date_to":   (date.today()+timedelta(days=365)).isoformat()
+        }), 201
+    finally:
+        conn.close()
+        
 # helpers.py  (o dentro de app.py)
 
 from datetime import date
