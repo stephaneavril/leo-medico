@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useUnmount } from 'ahooks';
 import { useRouter, useSearchParams } from 'next/navigation';
-import Cookies from 'js-cookie';
 
 import {
   AvatarQuality,
@@ -54,13 +53,13 @@ function InteractiveSessionContent() {
 
   const [config, setConfig] = useState<StartAvatarRequest>(DEFAULT_CONFIG);
   
-  // 🔥 CORRECCIÓN: Usamos un Ref para la información de la sesión para evitar datos obsoletos.
   const sessionInfoRef = useRef<{ name: string; email: string; scenario: string; token: string } | null>(null);
-
   const [uiState, setUiState] = useState<{ scenario: string | null }>({ scenario: null });
   const [showAutoplayBlockedMessage, setShowAutoplayBlockedMessage] = useState(false);
   const [isAttemptingAutoStart, setIsAttemptingAutoStart] = useState(false);
   const [hasUserMediaPermission, setHasUserMediaPermission] = useState(false);
+  
+  // 🔥 CORRECCIÓN CLAVE: Estado 'mounted' para prevenir error de hidratación #418
   const [mounted, setMounted] = useState(false);
 
   const recordingTimerRef = useRef<number>(480);
@@ -77,7 +76,9 @@ function InteractiveSessionContent() {
   const isFinalizingRef = useRef(false);
 
   useEffect(() => {
+    // Marcamos el componente como "montado" en el cliente.
     setMounted(true);
+
     const name = searchParams.get('name');
     const email = searchParams.get('email');
     const scenario = searchParams.get('scenario');
@@ -86,10 +87,8 @@ function InteractiveSessionContent() {
     if (name && email && scenario && token) {
       sessionInfoRef.current = { name, email, scenario, token };
       setUiState({ scenario });
-      Cookies.set('user_name', name, { sameSite: 'Lax' });
-      Cookies.set('user_email', email, { sameSite: 'Lax' });
     } else {
-      console.error("Faltan parámetros en la URL (name, email, scenario, token). Redirigiendo...");
+      console.error("Faltan parámetros en la URL. Redirigiendo...");
       router.push('/dashboard');
     }
   }, [router, searchParams]);
@@ -239,7 +238,7 @@ function InteractiveSessionContent() {
   }, [hasUserMediaPermission, fetchAccessToken, initAvatar, config, startAvatar, startVoiceChat, stopAndFinalizeSession, handleUserTalkingMessage, handleStreamingTalkingMessage]);
 
   useEffect(() => {
-    if (!mounted) return; // Solo ejecutar después del montaje inicial
+    if (!mounted) return;
     const getUserMediaStream = async () => {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: { width: 640, height: 480, frameRate: 15 }});
@@ -308,7 +307,8 @@ function InteractiveSessionContent() {
     }
   }
 
-  if (!mounted || !uiState.scenario) {
+  // 🔥 CORRECCIÓN: No renderizar el contenido principal hasta que el componente esté montado
+  if (!mounted) {
     return (
         <div className="w-screen h-screen flex flex-col items-center justify-center bg-zinc-900 text-white">
             <LoadingIcon className="w-10 h-10 animate-spin" />
@@ -320,7 +320,7 @@ function InteractiveSessionContent() {
   return (
     <div className="w-screen h-screen flex flex-col items-center bg-zinc-900 text-white relative">
       <h1 className="text-3xl font-bold text-blue-400 mt-6 mb-4" suppressHydrationWarning>
-        {`🧠 Leo – ${uiState.scenario}`}
+        {`🧠 Leo – ${uiState.scenario || ''}`}
       </h1>
       
       {sessionState === StreamingAvatarSessionState.INACTIVE && !hasUserMediaPermission && !showAutoplayBlockedMessage && (
