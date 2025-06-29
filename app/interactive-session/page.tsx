@@ -74,19 +74,30 @@ function InteractiveSessionContent() {
   const avatarVideoRef = useRef<HTMLVideoElement>(null);
   const isFinalizingRef = useRef(false);
 
-  // Efecto para leer los parámetros de la URL y establecer los datos de la sesión
-  useEffect(() => {
-    const name = searchParams.get('name');
-    const email = searchParams.get('email');
-    const scenario = searchParams.get('scenario');
-    const token = searchParams.get('token');
+    useEffect(() => {
+    // 1️⃣ Traemos TODO de la URL
+    const name     = searchParams.get('name')     || '';
+    const email    = searchParams.get('email')    || '';
+    const scenario = searchParams.get('scenario') || '';
 
+    // 2️⃣ Fallback para el JWT
+    const urlToken = searchParams.get('token') || '';
+    const cookieToken = (() => {
+      if (typeof document !== 'undefined') {
+        const m = document.cookie.match(/(?:^|; )jwt=([^;]+)/);
+        return m ? decodeURIComponent(m[1]) : '';
+      }
+      return '';
+    })();
+    const token = urlToken || cookieToken;
+
+    // 3️⃣ Guardamos sólo si viene todo
     if (name && email && scenario && token) {
       setSessionInfo({ name, email, scenario, token });
-      setIsReady(true); // Marcamos como listo para renderizar
+      setIsReady(true);
     } else {
-      console.error("Faltan parámetros en la URL. Redirigiendo...");
-      // router.push('/dashboard'); // Descomentar si quieres redirigir automáticamente
+      console.error('Faltan parámetros en la URL');
+      // router.push('/dashboard');
     }
   }, [searchParams, router]);
   

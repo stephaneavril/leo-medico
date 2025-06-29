@@ -746,13 +746,16 @@ def dashboard_data():
             result = cur.fetchone()
             total_used_seconds = result["total_seconds_used"] if result else 0
 
-        # --- Respuesta final JSON ---
-        return jsonify(
-            {
-                "sessions": sessions_to_send_to_frontend,
-                "used_seconds": total_used_seconds
-            }
-        ), 200
+        auth_header = request.headers.get("Authorization", "")
+        user_token = auth_header.replace("Bearer ", "") if auth_header.startswith("Bearer ") else auth_header
+
+        return jsonify({
+            "name": request.jwt["name"],          # 👈 nombre sacado del propio JWT
+            "email": email,                       # 👈 email del mismo JWT
+            "user_token": user_token,             # 👈 ahora sí lo enviamos al front
+            "sessions": sessions_to_send_to_frontend,
+            "used_seconds": total_used_seconds
+        }), 200
 
     except Exception as e:
         app.logger.exception("dashboard_data error general - EXCEPCIÓN CAPTURADA")
