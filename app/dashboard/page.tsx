@@ -1,11 +1,11 @@
-// app/dashboard/page.tsx (Este es el nuevo archivo)
+// app/dashboard/page.tsx
 
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { Suspense } from 'react';
-import DashboardClient from './DashboardClient'; // Importamos el componente que acabas de renombrar
+import DashboardClient from './DashboardClient';
 
-// Definimos la estructura de los datos para mayor claridad
+// Interfaces para tipar los datos que vienen del backend
 interface SessionRecord {
   id?: number;
   scenario: string;
@@ -20,12 +20,15 @@ interface SessionRecord {
 }
 
 interface DashboardData {
+    name: string;
+    email: string;
+    user_token: string;
     sessions: SessionRecord[];
     used_seconds: number;
 }
 
-// Esta función se ejecuta en el servidor para obtener los datos
-async function getDashboardData(jwt: string) {
+// Función que se ejecuta en el servidor para llamar al backend de Flask
+async function getDashboardData(jwt: string): Promise<DashboardData> {
   const flaskApiUrl = process.env.NEXT_PUBLIC_FLASK_API_URL;
   if (!flaskApiUrl) {
     throw new Error('La URL del backend no está configurada.');
@@ -34,10 +37,10 @@ async function getDashboardData(jwt: string) {
   const res = await fetch(`${flaskApiUrl}/dashboard_data`, {
     method: 'GET',
     headers: {
-        'Authorization': `Bearer ${jwt}`,
+        'Authorization': `Bearer ${jwt}`, // El token JWT se usa para la autorización
         'Content-Type': 'application/json',
     },
-    cache: 'no-store', // Muy importante para que los datos siempre estén actualizados
+    cache: 'no-store', // Asegura que los datos siempre sean frescos
   });
 
   if (!res.ok) {
@@ -49,12 +52,11 @@ async function getDashboardData(jwt: string) {
   return res.json();
 }
 
-
-// Este es el componente principal de la página, es un Server Component por defecto
+// Componente principal de la página (Server Component)
 export default async function DashboardPage() {
     const jwt = (await cookies()).get('jwt')?.value;
 
-  // Si no hay token, lo redirigimos a la página de inicio
+  // Si no hay token JWT en las cookies, el usuario no está autenticado, redirigir.
   if (!jwt) {
     redirect('/');
   }
@@ -63,14 +65,14 @@ export default async function DashboardPage() {
   let error: string | null = null;
 
   try {
-    // Aquí llamamos a la función para obtener los datos de forma segura
+    // Llamamos a la función para obtener todos los datos necesarios del backend
     initialData = await getDashboardData(jwt);
   } catch (err: any) {
     console.error('[Dashboard Page Server] Error al obtener datos:', err.message);
-    error = err.message; // Guardamos el error para mostrarlo
+    error = err.message;
   }
 
-  // Renderizamos el componente de cliente, pasándole los datos (o el error)
+  // Renderizamos el componente de cliente, pasándole los datos (o el error) como props.
   return (
     <Suspense fallback={<div className="min-h-screen flex items-center justify-center bg-zinc-900 text-white">Cargando...</div>}>
       <DashboardClient initialData={initialData} error={error} />
@@ -78,5 +80,5 @@ export default async function DashboardPage() {
   );
 }
 
-// Esto asegura que la página siempre se renderice en el servidor en cada petición
+// Asegura que la página siempre se renderice en el servidor en cada petición
 export const dynamic = 'force-dynamic';
