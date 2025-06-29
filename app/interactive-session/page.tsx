@@ -53,13 +53,14 @@ function InteractiveSessionContent() {
 
   const [config, setConfig] = useState<StartAvatarRequest>(DEFAULT_CONFIG);
   
-  const sessionInfoRef = useRef<{ name: string; email: string; scenario: string; token: string } | null>(null);
-  const [uiState, setUiState] = useState<{ scenario: string | null }>({ scenario: null });
+  // Usamos useState para manejar los datos de la sesión de forma segura
+  const [sessionInfo, setSessionInfo] = useState<{ name: string; email: string; scenario: string; token: string } | null>(null);
+  const [isReady, setIsReady] = useState(false); // Nuevo estado para controlar la renderización
+
   const [showAutoplayBlockedMessage, setShowAutoplayBlockedMessage] = useState(false);
   const [isAttemptingAutoStart, setIsAttemptingAutoStart] = useState(false);
   const [hasUserMediaPermission, setHasUserMediaPermission] = useState(false);
-  const [mounted, setMounted] = useState(false);
-
+  
   const recordingTimerRef = useRef<number>(480);
   const [timerDisplay, setTimerDisplay] = useState('08:00');
   
@@ -73,26 +74,21 @@ function InteractiveSessionContent() {
   const avatarVideoRef = useRef<HTMLVideoElement>(null);
   const isFinalizingRef = useRef(false);
 
+  // Efecto para leer los parámetros de la URL y establecer los datos de la sesión
   useEffect(() => {
-    setMounted(true);
-  }, []);
+    const name = searchParams.get('name');
+    const email = searchParams.get('email');
+    const scenario = searchParams.get('scenario');
+    const token = searchParams.get('token');
 
-  useEffect(() => {
-    if (mounted) {
-      const name = searchParams.get('name');
-      const email = searchParams.get('email');
-      const scenario = searchParams.get('scenario');
-      const token = searchParams.get('token');
-
-      if (name && email && scenario && token) {
-        sessionInfoRef.current = { name, email, scenario, token };
-        setUiState({ scenario });
-      } else {
-        console.error("Faltan parámetros en la URL. Redirigiendo...");
-        router.push('/dashboard');
-      }
+    if (name && email && scenario && token) {
+      setSessionInfo({ name, email, scenario, token });
+      setIsReady(true); // Marcamos como listo para renderizar
+    } else {
+      console.error("Faltan parámetros en la URL. Redirigiendo...");
+      // router.push('/dashboard'); // Descomentar si quieres redirigir automáticamente
     }
-  }, [mounted, router, searchParams]);
+  }, [searchParams, router]);
   
   const stopUserCameraRecording = useCallback(() => {
     if (localUserStreamRef.current) {
@@ -125,7 +121,7 @@ function InteractiveSessionContent() {
   }, []);
   
   const stopAndFinalizeSession = useCallback(async (sessionMessages: any[]) => {
-    if (isFinalizingRef.current || !sessionInfoRef.current) {
+    if (isFinalizingRef.current || !sessionInfo) {
       return;
     }
     isFinalizingRef.current = true;
@@ -135,7 +131,7 @@ function InteractiveSessionContent() {
     const finalize = async () => {
       stopUserCameraRecording();
   
-      const sessionInfo = sessionInfoRef.current!;
+      const { name, email, scenario, token } = sessionInfo;
       const userTranscript = sessionMessages.filter(m => m.sender === MessageSender.CLIENT).map(m => m.content).join('\n');
       const avatarTranscript = sessionMessages.filter(m => m.sender === MessageSender.AVATAR).map(m => m.content).join('\n');
       const duration = 480 - recordingTimerRef.current;
@@ -149,23 +145,14 @@ function InteractiveSessionContent() {
             const form = new FormData();
             form.append('video', videoBlob, 'user_recording.webm');
             
-            const jwt = sessionInfo.token;
-            
-            console.log('[API] Subiendo video a:', flaskApiUrl);
-            console.log('[API] Usando JWT para upload_video:', jwt);
-  
             const uploadRes = await fetch(`${flaskApiUrl}/upload_video`, {
               method: 'POST',
-              headers: { 
-                'Authorization': `Bearer ${jwt}` 
-              },
+              headers: { 'Authorization': `Bearer ${token}` },
               body: form,
             });
   
             const uploadJson = await uploadRes.json();
-            if (!uploadRes.ok) {
-              throw new Error(`Error en la subida ${uploadRes.status}: ${uploadJson.error || uploadJson.message || 'Error desconocido'}`);
-            }
+            if (!uploadRes.ok) throw new Error(`Error en la subida: ${uploadJson.message || 'Error desconocido'}`);
             videoS3Key = uploadJson.s3_object_key;
           }
         }
@@ -173,15 +160,7 @@ function InteractiveSessionContent() {
         await fetch(`${flaskApiUrl}/log_full_session`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            name: sessionInfo.name,
-            email: sessionInfo.email,
-            scenario: sessionInfo.scenario,
-            conversation: userTranscript,
-            avatar_transcript: avatarTranscript,
-            duration,
-            s3_object_key: videoS3Key
-          })
+          body: JSON.stringify({ name, email, scenario, conversation: userTranscript, avatar_transcript: avatarTranscript, duration, s3_object_key: videoS3Key })
         });
   
       } catch (err: any) {
@@ -198,7 +177,7 @@ function InteractiveSessionContent() {
     } else {
       finalize();
     }
-  }, [stopAvatar, stopUserCameraRecording, router]);
+  }, [stopAvatar, stopUserCameraRecording, router, sessionInfo]);
   
   const fetchAccessToken = useCallback(async () => {
     try {
@@ -239,7 +218,6 @@ function InteractiveSessionContent() {
   }, [hasUserMediaPermission, fetchAccessToken, initAvatar, config, startAvatar, startVoiceChat, stopAndFinalizeSession, handleUserTalkingMessage, handleStreamingTalkingMessage]);
 
   useEffect(() => {
-    if (!mounted) return;
     const getUserMediaStream = async () => {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: { width: 640, height: 480, frameRate: 15 }});
@@ -251,8 +229,10 @@ function InteractiveSessionContent() {
         setShowAutoplayBlockedMessage(true);
       }
     };
-    getUserMediaStream();
-  }, [mounted]);
+    if (isReady) { // Solo pedir permisos si tenemos los datos de sesión
+        getUserMediaStream();
+    }
+  }, [isReady]);
 
   useEffect(() => {
     if (sessionState === StreamingAvatarSessionState.CONNECTED && hasUserMediaPermission && !mediaRecorderRef.current) {
@@ -308,11 +288,12 @@ function InteractiveSessionContent() {
     }
   }
 
-  if (!mounted) {
+  // Si no estamos listos, mostramos un mensaje de carga para evitar errores
+  if (!isReady) {
     return (
         <div className="w-screen h-screen flex flex-col items-center justify-center bg-zinc-900 text-white">
             <LoadingIcon className="w-10 h-10 animate-spin" />
-            <p className="mt-4">Cargando...</p>
+            <p className="mt-4">Verificando datos de sesión...</p>
         </div>
     );
   }
@@ -320,7 +301,7 @@ function InteractiveSessionContent() {
   return (
     <div className="w-screen h-screen flex flex-col items-center bg-zinc-900 text-white relative">
       <h1 className="text-3xl font-bold text-blue-400 mt-6 mb-4" suppressHydrationWarning>
-        {`🧠 Leo – ${uiState.scenario || ''}`}
+        {`🧠 Leo – ${sessionInfo?.scenario || ''}`}
       </h1>
       
       {sessionState === StreamingAvatarSessionState.INACTIVE && !hasUserMediaPermission && !showAutoplayBlockedMessage && (
