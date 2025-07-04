@@ -1,43 +1,34 @@
 services:
-  # 1️⃣ Redis (Key‑Value)
+  # Redis ───────────────────────────────────────────────
   - type: redis
-    name: leo-trainer-redis
-    plan: starter         # mismo nivel que configuraste en la consola
+    name: leo-trainer-redis          # nuevo servicio KV
+    plan: starter
 
-  # 2️⃣ Backend Flask (Python)
+  # Backend Flask (ya existía) ──────────────────────────
   - type: web
-    name: leo-backend
+    name: leo-backend               # o usa el nombre que ya tenías
     env: python
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn app:app
     envVars:
-      # secretos → los gestionas en el panel o con Environment Groups
-      - key: OPENAI_API_KEY           # sync:false por defecto
-        sync: false
-      - key: AWS_ACCESS_KEY_ID
-        sync: false
-      - key: AWS_SECRET_ACCESS_KEY
-        sync: false
-      - key: AWS_S3_BUCKET_NAME
-        sync: false
-      - key: AWS_S3_REGION_NAME
-        sync: false
-      - key: DATABASE_URL
-        sync: false
-      - key: FLASK_SECRET_KEY
-        sync: false
-      - key: ADMIN_PASSWORD
-        sync: false
-      - key: TEMP_PROCESSING_FOLDER
-        sync: false
-      # 🔗 URL interna de Redis
+      # secretos ↓
+      - key: OPENAI_API_KEY            ; sync: false
+      - key: AWS_ACCESS_KEY_ID         ; sync: false
+      - key: AWS_SECRET_ACCESS_KEY     ; sync: false
+      - key: AWS_S3_BUCKET_NAME        ; sync: false
+      - key: AWS_S3_REGION_NAME        ; sync: false
+      - key: DATABASE_URL              ; sync: false
+      - key: FLASK_SECRET_KEY          ; sync: false
+      - key: ADMIN_PASSWORD            ; sync: false
+      - key: TEMP_PROCESSING_FOLDER    ; sync: false
+      # 🔗 URL interna de Redis (obligatoria para tu Flask-backend)
       - key: REDIS_URL
         fromService:
           name: leo-trainer-redis
           type: redis
           property: connectionString
 
-  # 3️⃣ Frontend Next.js (Node)
+  # Frontend Next.js (ya existía) ───────────────────────
   - type: web
     name: leo-frontend
     env: node
@@ -45,11 +36,11 @@ services:
     startCommand: npm run start
     envVars:
       - key: NEXT_PUBLIC_FLASK_API_URL
-        value: https://leo-backend.onrender.com    # ← usa el back que acabas de definir
+        value: https://leo-backend.onrender.com
       - key: NODE_ENV
         value: production
 
-  # 4️⃣ Celery Worker (Docker)
+  # Celery Worker (el background-worker) ────────────────
   - type: worker
     name: leo-trainer-worker
     env: docker
@@ -58,12 +49,8 @@ services:
     startCommand: >
       celery -A celery_worker.celery_app worker --loglevel=info -c 5
     envVars:
-      - key: CELERY_BROKER_URL
-        fromService:
-          name: leo-trainer-redis
-          type: redis
-          property: connectionString
-      - key: CELERY_RESULT_BACKEND
+      #  M I S M A  variable que lee tu código
+      - key: REDIS_URL
         fromService:
           name: leo-trainer-redis
           type: redis
