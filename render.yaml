@@ -3,6 +3,10 @@ services:
   - type: redis
     name: leo-trainer-redis
     plan: starter
+    # Redis necesita una lista de IPs permitidas. 0.0.0.0/0 = abierto a todo
+    ipAllowList:
+      - source: 0.0.0.0/0
+        description: allow all
 
   # ─────────── BACKEND FLASK ───────────
   - type: web
@@ -13,23 +17,13 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn app:app
     envVars:
-      # VARIABLES DE PRODUCCIÓN (ya existen en tu panel → sync: false)
-      - key: DATABASE_URL
-        sync: false
-      - key: OPENAI_API_KEY
-        sync: false
-      - key: JWT_SECRET
-        sync: false
-      - key: AWS_ACCESS_KEY_ID
-        sync: false
-      - key: AWS_SECRET_ACCESS_KEY
-        sync: false
-      # NUEVAS VARIABLES S3
-      - key: AWS_S3_BUCKET_NAME
-        value: leocoach
-      - key: AWS_S3_REGION_NAME
-        value: us-east-1
-      # CONEXIÓN REDIS COMPARTIDA
+      - key: DATABASE_URL            ; sync: false
+      - key: OPENAI_API_KEY          ; sync: false
+      - key: JWT_SECRET              ; sync: false
+      - key: AWS_ACCESS_KEY_ID       ; sync: false
+      - key: AWS_SECRET_ACCESS_KEY   ; sync: false
+      - key: AWS_S3_BUCKET_NAME      ; value: leocoach
+      - key: AWS_S3_REGION_NAME      ; value: us-east-1
       - key: REDIS_URL
         fromService:
           name: leo-trainer-redis
@@ -39,28 +33,10 @@ services:
   # ─────────── CELERY WORKER ───────────
   - type: worker
     name: leo-trainer-worker
-    env: docker
+    env: python          # ← ya NO es docker
     region: oregon
     branch: main
-    dockerfilePath: ./Dockerfile
+    buildCommand: pip install -r requirements.txt
     startCommand: celery -A celery_worker.celery_app worker --loglevel=info -c 5
-    envVars:
-      - key: DATABASE_URL
-        sync: false
-      - key: OPENAI_API_KEY
-        sync: false
-      - key: JWT_SECRET
-        sync: false
-      - key: AWS_ACCESS_KEY_ID
-        sync: false
-      - key: AWS_SECRET_ACCESS_KEY
-        sync: false
-      - key: AWS_S3_BUCKET_NAME
-        value: leocoach
-      - key: AWS_S3_REGION_NAME
-        value: us-east-1
-      - key: REDIS_URL
-        fromService:
-          name: leo-trainer-redis
-          type: redis
-          property: connectionString
+    envVarsFrom:
+      - leo-backend      # hereda todas las variables del backend
