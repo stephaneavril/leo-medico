@@ -16,6 +16,8 @@ import openai
 import boto3
 from botocore.exceptions import ClientError
 import re
+from celery_worker import process_session_video
+
 
 # 1) Carga variables de entorno
 load_dotenv(override=True)
@@ -179,43 +181,82 @@ def init_db():
             conn.close()
 
 def patch_db_schema():
+    """Asegura que todas las columnas opcionales existan en las tablas
+       `interactions` y `users`.  Se ejecuta solo una vez al inicio."""
     conn = None
     try:
         conn = get_db_connection()
         c = conn.cursor()
 
-        c.execute("SELECT column_name FROM information_schema.columns WHERE table_name='interactions' AND column_name='evaluation_rh'")
+        # -------- Tabla interactions --------
+        c.execute("""
+            SELECT column_name
+              FROM information_schema.columns
+             WHERE table_name = 'interactions'
+               AND column_name = 'evaluation_rh';
+        """)
         if not c.fetchone():
             c.execute("ALTER TABLE interactions ADD COLUMN evaluation_rh TEXT;")
             print("Added 'evaluation_rh' to interactions table.")
 
-        c.execute("SELECT column_name FROM information_schema.columns WHERE table_name='interactions' AND column_name='tip'")
+        c.execute("""
+            SELECT column_name
+              FROM information_schema.columns
+             WHERE table_name = 'interactions'
+               AND column_name = 'tip';
+        """)
         if not c.fetchone():
             c.execute("ALTER TABLE interactions ADD COLUMN tip TEXT;")
             print("Added 'tip' to interactions table.")
 
-        c.execute("SELECT column_name FROM information_schema.columns WHERE table_name='interactions' AND column_name='visual_feedback'")
+        c.execute("""
+            SELECT column_name
+              FROM information_schema.columns
+             WHERE table_name = 'interactions'
+               AND column_name = 'visual_feedback';
+        """)
         if not c.fetchone():
             c.execute("ALTER TABLE interactions ADD COLUMN visual_feedback TEXT;")
             print("Added 'visual_feedback' to interactions table.")
 
-        c.execute("SELECT column_name FROM information_schema.columns WHERE table_name='users' AND column_name='token'")
+        c.execute("""
+            SELECT column_name
+              FROM information_schema.columns
+             WHERE table_name = 'interactions'
+               AND column_name = 'visible_to_user';
+        """)
+        if not c.fetchone():
+            c.execute("ALTER TABLE interactions ADD COLUMN visible_to_user BOOLEAN DEFAULT FALSE;")
+            print("Added 'visible_to_user' to interactions table.")
+
+        # -------- Tabla users --------
+        c.execute("""
+            SELECT column_name
+              FROM information_schema.columns
+             WHERE table_name = 'users'
+               AND column_name = 'token';
+        """)
         if not c.fetchone():
             c.execute("ALTER TABLE users ADD COLUMN token TEXT UNIQUE;")
             print("Added 'token' to users table.")
 
         conn.commit()
-        print("\U0001F527 Database schema patched (PostgreSQL).")
+        print("🛠️  Database schema patched (PostgreSQL).")
+
     except Exception as e:
-        print(f"\U0001F525 Error patching PostgreSQL database schema: {e}")
+        print(f"🔥 Error patching PostgreSQL database schema: {e}")
         if conn:
             conn.rollback()
+
     finally:
         if conn:
             conn.close()
 
+
+# Ejecuta al iniciar la aplicación
 init_db()
 patch_db_schema()
+
 
 def upload_file_to_s3(file_path, bucket, object_name=None):
     """Sube un archivo a un bucket de S3"""
@@ -436,9 +477,13 @@ def admin_panel():
                 c.execute("UPDATE users SET token = %s WHERE id = %s", (new_token, user_id))
             conn.commit()
 
-        c.execute("""SELECT id, name, email, scenario, message, response, audio_path, timestamp, evaluation, evaluation_rh, tip, visual_feedback
-                         FROM interactions
-                         ORDER BY timestamp DESC""")
+        c.execute("""
+            SELECT id, name, email, scenario, message, response, audio_path,
+                    timestamp, evaluation, evaluation_rh, tip, visual_feedback,
+                    visible_to_user          -- ← NUEVO
+            FROM interactions
+            ORDER BY timestamp DESC
+        """)
         raw_data = c.fetchall()
 
         processed_data = []
@@ -459,6 +504,7 @@ def admin_panel():
                 # 9: evaluation_rh (raw JSON string)
                 # 10: tip
                 # 11: visual_feedback
+                # 12: visible_to_user
 
                 # Safely parse JSON fields
                 user_dialogue_raw = json.loads(row[4]) if row[4] else []
@@ -508,7 +554,8 @@ def admin_panel():
                     row[8], # 8: Public Summary (evaluation)
                     parsed_rh_evaluation, # 9: RH evaluation (full dict for detailed analysis)
                     row[10], # 10: Tip
-                    row[11] # 11: Visual feedback
+                    row[11], # 11: Visual feedback
+                    row[12] # 12: visible_to_user
                 ]
 
                 # Filling in default messages if certain fields are empty
@@ -536,7 +583,8 @@ def admin_panel():
                     f"Error de procesamiento: {str(e)}", # 8: Public Summary
                     {"status": f"Error al cargar análisis de RH: {str(e)}"}, # 9: RH Evaluation (dict)
                     "Error al cargar consejo.", # 10: Tip
-                    "Error al cargar feedback visual." # 11: Visual Feedback
+                    "Error al cargar feedback visual.", # 11: Visual Feedback
+                    "N/A"   # 12: visible_to_user placeholder
                 ])
 
         c.execute("SELECT id, name, email, start_date, end_date, active, token FROM users")
@@ -942,6 +990,21 @@ def log_full_session():
             session_id = cur.fetchone()[0]
         conn.commit()
         print(f"[DB] Sesión #{session_id} registrada correctamente.")
+
+        # ───────── LANZA LA TAREA CELERY ─────────
+        task_data = {
+            "session_id":       session_id,
+            "name":             name,
+            "email":            email,
+            "scenario":         scenario,
+            "duration":         duration,
+            "video_object_key": video_key,      # la key en S3
+            "user_transcript":  user_json,
+            "avatar_transcript": avatar_json
+        }   
+        process_session_video.delay(task_data)
+        # ─────────────────────────────────────────
+
         return jsonify(
             {
                 "status": "success",

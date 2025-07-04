@@ -268,6 +268,15 @@
           </div>
         </div>
 
+        <!-- BOTÓN PUBLICAR / ESTADO -->
+{% if not row[12] %}
+  <form action="/admin/publish_eval/{{ row[0] }}" method="POST" style="margin-top:12px">
+    <button type="submit">✅ Publicar al usuario</button>
+  </form>
+{% else %}
+  <p style="color:green;font-weight:600;margin-top:12px">Publicado en dashboard</p>
+{% endif %}
+
         <!-- VIDEO -->
         <div>
         {% if row[6] and row[6] not in ["Video_Not_Available_Error","Video_Processing_Failed","Video_Missing_Error"] %}
@@ -301,6 +310,8 @@
         </div>
       </div>
     </div>
+
+    
 
 <!-- ===== GESTIÓN DE USUARIOS ===== -->
 <h2 class="section-title">🔐 Gestión de Usuarios</h2>
