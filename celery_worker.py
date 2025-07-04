@@ -1,49 +1,42 @@
-# celery_worker.py – versión depurada 2025‑07‑04
-# -------------------------------------------------
+# celery_worker.py  – versión 2025-07-04 lista para Render
+# --------------------------------------------------------
 """
-Worker de Celery para Leo‑Trainer.
-Se conecta a Redis (broker + backend) y PostgreSQL, procesa los videos
-subidos, extrae audio, llama a AWS Transcribe, evalúa con OpenAI y guarda
-resultado.  Esta versión corrige:
-  • Uso de **una** única instancia de Celery.
-  • Puerto/URL de Redis coherente con Render.
-  • Eliminación del puerto 6378 y fallback a 6379.
-  • CREATE TABLE sin comentarios SQL que rompían PostgreSQL.
+Worker de Celery para Leo-Trainer.
+  • Se conecta a Redis (broker + backend) y PostgreSQL.
+  • Procesa vídeos, extrae audio, transcribe, evalúa con OpenAI y guarda resultado.
+  • Arreglos clave:
+      – Una única instancia de Celery.
+      – Fallback Redis → 6379, nunca 6378.
+      – SQL limpio (sin comentarios dentro de CREATE TABLE / ALTER TABLE).
 """
 
 from __future__ import annotations
-import os
-import json
-import time
-import subprocess
+import os, json, time, subprocess, requests, cv2
 from datetime import datetime
 from urllib.parse import urlparse
 
-from celery import Celery
 from dotenv import load_dotenv
-import requests
-import cv2
+from celery import Celery
 
 import boto3
 from botocore.exceptions import ClientError
 import psycopg2
 
-from evaluator import evaluate_interaction  # tu evaluador IA
-
-# ---------------------------------------------------------------------
-# Carga de variables de entorno
-# ---------------------------------------------------------------------
+from evaluator import evaluate_interaction   # tu evaluador IA
+# ------------------------------------------------------------------
+# 1. Variables de entorno
+# ------------------------------------------------------------------
 load_dotenv()
 
-# 1) Redis ------------------------------------------------------------
+# Redis (Render inyecta REDIS_URL automáticamente a los servicios dependientes)
 REDIS_URL = (
-    os.getenv("REDIS_URL")             # inyectado por Render (recommended)
-    or os.getenv("CELERY_BROKER_URL")  # compatibilidad Heroku/otros
+    os.getenv("REDIS_URL")             # 👍 recomendado en Render
+    or os.getenv("CELERY_BROKER_URL")  # compatibilidad con otros entornos
     or "redis://localhost:6379/0"      # fallback local
 )
 
+# Celery – una ÚNICA instancia
 celery_app = Celery("leo_trainer_tasks", broker=REDIS_URL, backend=REDIS_URL)
-
 celery_app.conf.update(
     task_track_started=True,
     task_acks_late=True,
@@ -55,15 +48,15 @@ celery_app.conf.update(
     enable_utc=False,
 )
 
-# 2) Carpetas temporales ---------------------------------------------
+# Carpetas temporales
 TEMP_PROCESSING_FOLDER = os.getenv("TEMP_PROCESSING_FOLDER", "/tmp/leo_trainer_processing")
 os.makedirs(TEMP_PROCESSING_FOLDER, exist_ok=True)
 
-# 3) AWS (S3 + Transcribe) -------------------------------------------
-AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
+# AWS
+AWS_ACCESS_KEY_ID     = os.getenv("AWS_ACCESS_KEY_ID")
 AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
-AWS_S3_BUCKET_NAME = os.getenv("AWS_S3_BUCKET_NAME", "leo-trainer-videos")
-AWS_S3_REGION_NAME = os.getenv("AWS_S3_REGION_NAME", "us-west-2")
+AWS_S3_BUCKET_NAME    = os.getenv("AWS_S3_BUCKET_NAME", "leo-trainer-videos")
+AWS_S3_REGION_NAME    = os.getenv("AWS_S3_REGION_NAME", "us-west-2")
 
 s3_client = boto3.client(
     "s3",
@@ -71,7 +64,6 @@ s3_client = boto3.client(
     aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
     region_name=AWS_S3_REGION_NAME,
 )
-
 transcribe_client = boto3.client(
     "transcribe",
     aws_access_key_id=AWS_ACCESS_KEY_ID,
@@ -79,15 +71,17 @@ transcribe_client = boto3.client(
     region_name=AWS_S3_REGION_NAME,
 )
 
-# 4) PostgreSQL -------------------------------------------------------
+# ------------------------------------------------------------------
+# 2. Conexión y schema PostgreSQL
+# ------------------------------------------------------------------
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
-    raise RuntimeError("DATABASE_URL environment variable is not set!")
+    raise ValueError("DATABASE_URL environment variable is not set!")
 
 def get_db_connection():
     p = urlparse(DATABASE_URL)
     return psycopg2.connect(
-        database=p.path[1:],
+        database=p.path.lstrip("/"),
         user=p.username,
         password=p.password,
         host=p.hostname,
@@ -95,95 +89,78 @@ def get_db_connection():
         sslmode="require",
     )
 
-# ---------------------------------------------------------------------
-#   Base de datos – creación / parcheo
-# ---------------------------------------------------------------------
-
-def init_db():
-    """Crea las tablas si no existen."""
-    conn = None
+def init_db() -> None:
+    """Crea tablas si no existen (SQL sin comentarios)."""
+    conn = get_db_connection()
     try:
-        conn = get_db_connection()
         cur = conn.cursor()
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS interactions (
-                id SERIAL PRIMARY KEY,
-                name TEXT,
-                email TEXT,
-                scenario TEXT,
-                message TEXT,
-                response TEXT,
-                audio_path TEXT,
-                timestamp TEXT,
-                evaluation TEXT,
-                evaluation_rh TEXT,
-                duration_seconds INTEGER DEFAULT 0,
-                tip TEXT,
-                visual_feedback TEXT,
+                id                SERIAL PRIMARY KEY,
+                name              TEXT,
+                email             TEXT,
+                scenario          TEXT,
+                message           TEXT,
+                response          TEXT,
+                audio_path        TEXT,
+                timestamp         TEXT,
+                evaluation        TEXT,
+                evaluation_rh     TEXT,
+                duration_seconds  INTEGER DEFAULT 0,
+                tip               TEXT,
+                visual_feedback   TEXT,
                 avatar_transcript TEXT,
-                visible_to_user BOOLEAN DEFAULT FALSE
+                visible_to_user   BOOLEAN DEFAULT FALSE
             );
             """
         )
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS users (
-                id SERIAL PRIMARY KEY,
-                name TEXT,
-                email TEXT UNIQUE,
+                id         SERIAL PRIMARY KEY,
+                name       TEXT,
+                email      TEXT UNIQUE,
                 start_date TEXT,
-                end_date TEXT,
-                active INTEGER DEFAULT 1,
-                token TEXT UNIQUE
+                end_date   TEXT,
+                active     INTEGER  DEFAULT 1,
+                token      TEXT     UNIQUE
             );
             """
         )
         conn.commit()
-        print("📄 Database initialized (PostgreSQL).")
-    except Exception as e:
-        if conn:
-            conn.rollback()
-        print(f"🔥 DB init error: {e}")
+        print("📄  DB lista (PostgreSQL).")
     finally:
-        if conn:
-            conn.close()
+        conn.close()
 
-
-def patch_db_schema():
+def patch_db_schema() -> None:
     """Añade columnas faltantes de forma idempotente."""
-    statements = [
-        ("interactions", "avatar_transcript", "ALTER TABLE interactions ADD COLUMN avatar_transcript TEXT;"),
-        ("interactions", "tip", "ALTER TABLE interactions ADD COLUMN tip TEXT;"),
-        ("interactions", "visual_feedback", "ALTER TABLE interactions ADD COLUMN visual_feedback TEXT;"),
-        ("interactions", "visible_to_user", "ALTER TABLE interactions ADD COLUMN visible_to_user BOOLEAN DEFAULT FALSE;"),
-        ("users", "token", "ALTER TABLE users ADD COLUMN token TEXT UNIQUE;"),
-    ]
-    conn = None
+    conn = get_db_connection()
     try:
-        conn = get_db_connection()
         cur = conn.cursor()
-        for table, column, sql in statements:
+        def _add(col: str, table: str = "interactions", ddl: str = "TEXT"):
             cur.execute(
                 """
-                SELECT 1 FROM information_schema.columns WHERE table_name=%s AND column_name=%s;
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name=%s AND column_name=%s
                 """,
-                (table, column),
+                (table, col),
             )
             if not cur.fetchone():
-                cur.execute(sql)
-                print(f"🛠 Added column {column} to {table}.")
+                cur.execute(f'ALTER TABLE {table} ADD COLUMN {col} {ddl};')
+                print(f"  → ADD COLUMN {col} en {table}")
+
+        _add("avatar_transcript")
+        _add("tip")
+        _add("visual_feedback")
+        _add("visible_to_user", ddl="BOOLEAN DEFAULT FALSE")
+        _add("token", table="users")
+
         conn.commit()
-    except Exception as e:
-        if conn:
-            conn.rollback()
-        print(f"🔥 DB patch error: {e}")
+        print("🔧  DB patch aplicado.")
     finally:
-        if conn:
-            conn.close()
+        conn.close()
 
-
-# Ejecutamos inmediatamente
 init_db()
 patch_db_schema()
 
@@ -269,9 +246,16 @@ def analyze_video_posture(video_path: str) -> tuple[str, str, str]:
 # Tarea principal
 # ---------------------------------------------------------------------------
 
-@celery_app.task(bind=True, acks_late=True)
-def process_session_video(self, data: dict) -> dict:  # noqa: C901 – función larga pero explícita
-    """Procesa el video de una sesión y actualiza DB con evaluación IA."""
+@celery_app.task
+def process_session_video(data: dict) -> dict:
+    """
+    Procesa la sesión:
+      1. Descarga video .webm de S3 (o detecta ausencia).
+      2. Convierte a MP4 y comprime.
+      3. Extrae audio y llama a AWS Transcribe.
+      4. Evalúa con OpenAI vía evaluate_interaction().
+      5. Guarda todo en PostgreSQL.
+    """
     # --- Extracción de campos básicos --------------------------------------------------
     session_id: int = data["session_id"]
     name = data.get("name")
