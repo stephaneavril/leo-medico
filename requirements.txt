@@ -8,7 +8,7 @@ pandas
 matplotlib
 opencv-python
 moviepy==1.0.3
-mediapipe
+mediapipe==0.10.21
 celery[redis] 
 boto3
 psycopg2-binary
