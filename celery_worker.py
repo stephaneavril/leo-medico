@@ -157,10 +157,15 @@ def patch_db_schema():
             c.execute("ALTER TABLE interactions ADD COLUMN visual_feedback TEXT;")
             print("Added 'visual_feedback' to interactions table in worker.")
 
-        c.execute("SELECT column_name FROM information_schema.columns WHERE table_name='interactions' AND column_name='visible_to_user'")
+        c.execute("""
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_name = 'interactions'
+            AND column_name = 'visible_to_user';
+        """)
         if not c.fetchone():
-        c.execute("ALTER TABLE interactions ADD COLUMN visible_to_user BOOLEAN DEFAULT FALSE;")
-        print("Added 'visible_to_user' to interactions table.")
+            c.execute("ALTER TABLE interactions ADD COLUMN visible_to_user BOOLEAN DEFAULT FALSE;")
+            print("Added 'visible_to_user' to interactions table.")
             
         c.execute("SELECT column_name FROM information_schema.columns WHERE table_name='users' AND column_name='token'")
         if not c.fetchone():
