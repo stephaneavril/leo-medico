@@ -247,51 +247,47 @@ def analyze_video_posture(video_path: str) -> tuple[str, str, str]:
     return "❌ No se detectó rostro en el video.", "No detectado", "0.0%"
 
 # ---------------------------------------------------------------------------
-# Tarea principal
+#  TAREA PRINCIPAL · Celery
 # ---------------------------------------------------------------------------
-
 @celery_app.task
 def process_session_video(data: dict) -> dict:
-    video_to_process_path: str | None = None
     """
-    Procesa la sesión:
-      1. Descarga video .webm de S3 (o detecta ausencia).
-      2. Convierte a MP4 y comprime.
-      3. Extrae audio y llama a AWS Transcribe.
-      4. Evalúa con OpenAI vía evaluate_interaction().
-      5. Guarda todo en PostgreSQL.
+    1. Descarga el .webm de S3
+    2. Convierte → MP4 y comprime
+    3. Transcribe audio con AWS Transcribe
+    4. Evalúa con OpenAI (evaluate_interaction)
+    5. Guarda resultados en PostgreSQL
     """
-    # --- Extracción de campos básicos --------------------------------------------------
+    # ───────────── EXTRACCIÓN BÁSICA ─────────────
     session_id: int = data["session_id"]
-    name = data.get("name")
-    email = data.get("email")
-    scenario = data.get("scenario")
-    duration = int(data.get("duration", 0))
-    video_key = data.get("video_object_key")
+    name    = data.get("name")
+    email   = data.get("email")
+    scenario= data.get("scenario")
+    duration= int(data.get("duration", 0))
+    video_key = data.get("video_object_key")           # ← misma key que subió el front
 
     timestamp = datetime.utcnow().isoformat()
 
-    # Defaults ------------------------------------------------------------------------
-    user_transcript = ""
-    public_summary = "Evaluación no disponible."
-    internal_summary = {}
-    tip_text = "Consejo no disponible."
-    posture_feedback = "Análisis visual no realizado."
-    final_video_url = None
+    # Defaults
+    user_transcript   = ""
+    public_summary    = "Evaluación no disponible."
+    internal_summary  = {}
+    tip_text          = "Consejo no disponible."
+    posture_feedback  = "Análisis visual no realizado."
+    final_video_url   = None
 
     if not video_key:
         return {"status": "error", "error": "video_object_key faltante"}
 
-    # ---------------------------------------------------------------------------
-    # Descarga / conversión / compresión de video
-    # ---------------------------------------------------------------------------
+    # ───────────── DESCARGA / CONVERSIÓN VIDEO ─────────────
     tmp_webm = os.path.join(TEMP_PROCESSING_FOLDER, video_key)
     if not os.path.exists(tmp_webm):
-        if not download_file_from_s3(AWS_S3_BUCKET_NAME, video_key, tmp_webm):
+        ok = download_file_from_s3(AWS_S3_BUCKET_NAME, video_key, tmp_webm)
+        if not ok:
             return {"status": "error", "error": "No se encontró el video en S3"}
 
-    mp4_key = video_key.replace(".webm", ".mp4")
-    tmp_mp4 = os.path.join(TEMP_PROCESSING_FOLDER, mp4_key)
+    mp4_key  = video_key.replace(".webm", ".mp4")
+    tmp_mp4  = os.path.join(TEMP_PROCESSING_FOLDER, mp4_key)
 
     video_path_for_ai = tmp_webm
     if convert_webm_to_mp4(tmp_webm, tmp_mp4):
@@ -300,16 +296,12 @@ def process_session_video(data: dict) -> dict:
         if compress_video_for_ai(tmp_mp4, compressed):
             video_path_for_ai = compressed
 
-    # ---------------------------------------------------------------------------
-    # Extracción de audio y transcripción con AWS Transcribe
-    # ---------------------------------------------------------------------------
+    # ───────────── AUDIO + TRANSCRIPCIÓN ─────────────
     audio_key = f"audio/{os.path.splitext(video_key)[0]}.wav"
     tmp_audio = os.path.join(TEMP_PROCESSING_FOLDER, os.path.basename(audio_key))
 
-    ffmpeg_cmd = [
-        "ffmpeg", "-i", video_path_for_ai, "-vn", "-acodec", "pcm_s16le",
-        "-ar", "16000", "-ac", "1", "-y", tmp_audio,
-    ]
+    ffmpeg_cmd = ["ffmpeg", "-i", video_path_for_ai, "-vn", "-acodec", "pcm_s16le",
+                  "-ar", "16000", "-ac", "1", "-y", tmp_audio]
     if _run_ffmpeg(ffmpeg_cmd, video_path_for_ai):
         audio_url = upload_file_to_s3(tmp_audio, AWS_S3_BUCKET_NAME, audio_key)
         if audio_url:
@@ -321,44 +313,39 @@ def process_session_video(data: dict) -> dict:
                 LanguageCode="es-US",
             )
             for _ in range(60):
-                status = aws_transcribe.get_transcription_job(TranscriptionJobName=job_name)[
-                    "TranscriptionJob"
-                ]["TranscriptionJobStatus"]
+                status = aws_transcribe.get_transcription_job(
+                    TranscriptionJobName=job_name
+                )["TranscriptionJob"]["TranscriptionJobStatus"]
                 if status in {"COMPLETED", "FAILED"}:
                     break
                 time.sleep(10)
             if status == "COMPLETED":
-                uri = aws_transcribe.get_transcription_job(TranscriptionJobName=job_name)[
-                    "TranscriptionJob"
-                ]["Transcript"]["TranscriptFileUri"]
+                uri = aws_transcribe.get_transcription_job(
+                    TranscriptionJobName=job_name
+                )["TranscriptionJob"]["Transcript"]["TranscriptFileUri"]
                 user_transcript = requests.get(uri).json()["results"]["transcripts"][0]["transcript"]
 
-    # ---------------------------------------------------------------------------
-    # Análisis postura visual
-    # ---------------------------------------------------------------------------
+    # ───────────── ANÁLISIS VISUAL ─────────────
     if os.path.exists(video_path_for_ai):
         posture_feedback, _, _ = analyze_video_posture(video_path_for_ai)
 
-    # ---------------------------------------------------------------------------
-# Evaluación IA y tip personalizado
-# ---------------------------------------------------------------------------
-if user_transcript.strip():
-    try:
-        summaries = evaluate_interaction(
-            user_transcript=user_transcript,      # transcripción del usuario
-            avatar_transcript="",                 # (vacío si no lo usas)
-            video_to_process_path=video_path_for_ai  # ← NOMBRE QUE ESPERA LA FUNCIÓN
-        )
-        public_summary   = summaries.get("public", public_summary)
-        internal_summary = summaries.get("internal", {})
-    except Exception as e:
-        internal_summary = {"error": str(e)}
-        public_summary   = "⚠️ Evaluación automática no disponible."
-else:
-    public_summary = "⚠️ No se pudo transcribir la intervención del participante."
+    # ───────────── EVALUACIÓN IA + TIP ─────────────
+    if user_transcript.strip():
+        try:
+            summaries = evaluate_interaction(
+                user_transcript=user_transcript,
+                avatar_transcript="",
+                video_to_process_path=video_path_for_ai
+            )
+            public_summary   = summaries.get("public", public_summary)
+            internal_summary = summaries.get("internal", {})
+        except Exception as e:
+            internal_summary = {"error": str(e)}
+            public_summary   = "⚠️ Evaluación automática no disponible."
+    else:
+        public_summary = "⚠️ No se pudo transcribir la intervención del participante."
 
-
-    # Generar tip -------------------------------------------------------------
+    # Generar tip genérico si la IA principal falló
     try:
         from openai import OpenAI
         chat = OpenAI(api_key=os.getenv("OPENAI_API_KEY")).chat.completions.create(
@@ -373,9 +360,7 @@ else:
     except Exception as e:
         tip_text = f"⚠️ No se pudo generar tip: {e}"
 
-    # ---------------------------------------------------------------------------
-    # Guardar en DB
-    # ---------------------------------------------------------------------------
+    # ───────────── GUARDAR EN BD ─────────────
     conn = None
     try:
         conn = get_db_connection()
@@ -398,7 +383,7 @@ else:
                     json.dumps(internal_summary, ensure_ascii=False),
                     tip_text,
                     posture_feedback,
-                    final_video_url,
+                    video_key,      # almacenamos la key
                     duration,
                     timestamp,
                     session_id,
@@ -413,21 +398,18 @@ else:
         if conn:
             conn.close()
 
-    # Limpieza ----------------------------------------------------------------
-    for f in [tmp_webm, tmp_mp4, tmp_audio, video_path_for_ai]:
-        try:
-            if f and os.path.exists(f):
-                os.remove(f)
-        except Exception:
-            pass
+    # Limpieza local
+    for f in [tmp_webm, tmp_mp4, tmp_audio]:
+        if f and os.path.exists(f):
+            os.remove(f)
+
+    # URL presignada para panel admin
+    final_video_url = upload_file_to_s3(video_path_for_ai, AWS_S3_BUCKET_NAME, f"processed/{mp4_key}")
 
     return {
         "status": "ok",
-        "evaluation": public_summary,
+        "session_id": session_id,
+        "summary": public_summary,
         "tip": tip_text,
-        "visual_feedback": posture_feedback,
-        "final_video_url": final_video_url,
-        "timestamp": timestamp,
-        "name": name,
-        "email": email,
+        "video": final_video_url
     }
