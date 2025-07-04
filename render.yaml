@@ -45,12 +45,10 @@ services:
     name: leo-trainer-worker
     env: docker
     dockerfilePath: ./Dockerfile
-    region: oregon
     startCommand: >
       celery -A celery_worker.celery_app worker --loglevel=info -c 5
     envVars:
-      #  M I S M A  variable que lee tu código
-      - key: REDIS_URL
+      - key: REDIS_URL          # ← el mismo nombre que leerá el código
         fromService:
           name: leo-trainer-redis
           type: redis
