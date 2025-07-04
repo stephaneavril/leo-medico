@@ -114,7 +114,7 @@ def init_db():
                 duration_seconds INTEGER DEFAULT 0,
                 tip TEXT,
                 visual_feedback TEXT,
-                avatar_transcript TEXT -- AÑADE ESTA LÍNEA AQUÍ
+                avatar_transcript TEXT, -- AÑADE ESTA LÍNEA AQUÍ
                 visible_to_user BOOLEAN DEFAULT FALSE  -- si aún no la añadiste aquí
             );
         ''')
