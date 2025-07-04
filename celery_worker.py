@@ -55,8 +55,12 @@ os.makedirs(TEMP_PROCESSING_FOLDER, exist_ok=True)
 # AWS
 AWS_ACCESS_KEY_ID     = os.getenv("AWS_ACCESS_KEY_ID")
 AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
-AWS_S3_BUCKET_NAME    = os.getenv("AWS_S3_BUCKET_NAME", "leo-trainer-videos")
-AWS_S3_REGION_NAME    = os.getenv("AWS_S3_REGION_NAME", "us-west-2")
+AWS_S3_BUCKET_NAME = (
+    os.getenv("AWS_S3_BUCKET_NAME", "leocoach")
+    .split("#", 1)[0].strip().strip("'\"")
+)
+AWS_S3_REGION_NAME = os.getenv("AWS_S3_REGION_NAME", "us-east-1")
+
 
 s3_client = boto3.client(
     "s3",
@@ -336,18 +340,23 @@ def process_session_video(data: dict) -> dict:
         posture_feedback, _, _ = analyze_video_posture(video_path_for_ai)
 
     # ---------------------------------------------------------------------------
-    # Evaluación IA y tip personalizado
-    # ---------------------------------------------------------------------------
-    if user_transcript.strip():
-        try:
-            summaries = evaluate_interaction(user_transcript, "", video_path_for_ai)
-            public_summary = summaries.get("public", public_summary)
-            internal_summary = summaries.get("internal", {})
-        except Exception as e:
-            internal_summary = {"error": str(e)}
-            public_summary = "⚠️ Evaluación automática no disponible."    
-    else:
-        public_summary = "⚠️ No se pudo transcribir la intervención del participante."
+# Evaluación IA y tip personalizado
+# ---------------------------------------------------------------------------
+if user_transcript.strip():
+    try:
+        summaries = evaluate_interaction(
+            user_transcript=user_transcript,      # transcripción del usuario
+            avatar_transcript="",                 # (vacío si no lo usas)
+            video_to_process_path=video_path_for_ai  # ← NOMBRE QUE ESPERA LA FUNCIÓN
+        )
+        public_summary   = summaries.get("public", public_summary)
+        internal_summary = summaries.get("internal", {})
+    except Exception as e:
+        internal_summary = {"error": str(e)}
+        public_summary   = "⚠️ Evaluación automática no disponible."
+else:
+    public_summary = "⚠️ No se pudo transcribir la intervención del participante."
+
 
     # Generar tip -------------------------------------------------------------
     try:
