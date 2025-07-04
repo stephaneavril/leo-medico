@@ -1,11 +1,18 @@
 services:
+  # 1️⃣ Redis (Key‑Value)
+  - type: redis
+    name: leo-trainer-redis
+    plan: starter         # mismo nivel que configuraste en la consola
+
+  # 2️⃣ Backend Flask (Python)
   - type: web
     name: leo-backend
     env: python
-    buildCommand: "pip install -r requirements.txt"
-    startCommand: "gunicorn app:app"
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app
     envVars:
-      - key: OPENAI_API_KEY
+      # secretos → los gestionas en el panel o con Environment Groups
+      - key: OPENAI_API_KEY           # sync:false por defecto
         sync: false
       - key: AWS_ACCESS_KEY_ID
         sync: false
@@ -23,14 +30,41 @@ services:
         sync: false
       - key: TEMP_PROCESSING_FOLDER
         sync: false
+      # 🔗 URL interna de Redis
+      - key: REDIS_URL
+        fromService:
+          name: leo-trainer-redis
+          type: redis
+          property: connectionString
 
+  # 3️⃣ Frontend Next.js (Node)
   - type: web
     name: leo-frontend
     env: node
-    buildCommand: "npm install && npm run build"
-    startCommand: "npm run start"
+    buildCommand: npm install && npm run build
+    startCommand: npm run start
     envVars:
       - key: NEXT_PUBLIC_FLASK_API_URL
-        value: "https://leo-dm-frontend.onrender.com"
-      - key: NODE_ENV 
-        value: "production" 
+        value: https://leo-backend.onrender.com    # ← usa el back que acabas de definir
+      - key: NODE_ENV
+        value: production
+
+  # 4️⃣ Celery Worker (Docker)
+  - type: worker
+    name: leo-trainer-worker
+    env: docker
+    dockerfilePath: ./Dockerfile
+    region: oregon
+    startCommand: >
+      celery -A celery_worker.celery_app worker --loglevel=info -c 5
+    envVars:
+      - key: CELERY_BROKER_URL
+        fromService:
+          name: leo-trainer-redis
+          type: redis
+          property: connectionString
+      - key: CELERY_RESULT_BACKEND
+        fromService:
+          name: leo-trainer-redis
+          type: redis
+          property: connectionString
