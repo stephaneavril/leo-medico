@@ -25,6 +25,10 @@ from urllib.parse import urlparse
 
 load_dotenv()
 
+BROKER_URL = os.getenv("REDIS_URL", "redis://localhost:6378/0")
+
+celery_app = Celery("leo", broker=BROKER_URL, backend=BROKER_URL)
+
 # --- Configuración de rutas para archivos temporales (¡Ahora /tmp para volátiles!) ---
 # /tmp es el lugar estándar para archivos temporales en Linux/Docker, que son efímeros.
 TEMP_PROCESSING_FOLDER = os.getenv("TEMP_PROCESSING_FOLDER", "/tmp/leo_trainer_processing") 

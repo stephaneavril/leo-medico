@@ -1024,6 +1024,21 @@ def log_full_session():
         if conn:
             conn.close()
 
+@app.route("/admin/publish_eval/<int:session_id>", methods=["POST"])
+def publish_eval(session_id):
+    if not session.get("admin"):
+        return redirect("/login")
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE interactions SET visible_to_user = TRUE WHERE id = %s", (session_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+    return redirect("/admin")
+
 @app.route("/healthz")
 def health_check():
     return "OK", 200
