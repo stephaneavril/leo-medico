@@ -248,6 +248,7 @@ def analyze_video_posture(video_path: str) -> tuple[str, str, str]:
 
 @celery_app.task
 def process_session_video(data: dict) -> dict:
+    video_to_process_path: str | None = None
     """
     Procesa la sesión:
       1. Descarga video .webm de S3 (o detecta ausencia).
