@@ -16,20 +16,13 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn app:app
     envVars:
-      - key: DATABASE_URL
-        sync: false
-      - key: OPENAI_API_KEY
-        sync: false
-      - key: JWT_SECRET
-        sync: false
-      - key: AWS_ACCESS_KEY_ID
-        sync: false
-      - key: AWS_SECRET_ACCESS_KEY
-        sync: false
-      - key: AWS_S3_BUCKET_NAME
-        value: leocoach
-      - key: AWS_S3_REGION_NAME
-        value: us-east-1
+      - key: DATABASE_URL            ; sync: false
+      - key: OPENAI_API_KEY          ; sync: false
+      - key: JWT_SECRET              ; sync: false
+      - key: AWS_ACCESS_KEY_ID       ; sync: false
+      - key: AWS_SECRET_ACCESS_KEY   ; sync: false
+      - key: AWS_S3_BUCKET_NAME      ; value: leocoach
+      - key: AWS_S3_REGION_NAME      ; value: us-east-1
       - key: REDIS_URL
         fromService:
           name: leo-trainer-redis
@@ -44,5 +37,16 @@ services:
     branch: main
     buildCommand: pip install -r requirements.txt
     startCommand: celery -A celery_worker.celery_app worker --loglevel=info -c 5
-    envVarsFrom:
-      - leo-backend            # hereda TODAS las vars del backend
+    envVars:
+      - key: DATABASE_URL            ; sync: false
+      - key: OPENAI_API_KEY          ; sync: false
+      - key: JWT_SECRET              ; sync: false
+      - key: AWS_ACCESS_KEY_ID       ; sync: false
+      - key: AWS_SECRET_ACCESS_KEY   ; sync: false
+      - key: AWS_S3_BUCKET_NAME      ; value: leocoach
+      - key: AWS_S3_REGION_NAME      ; value: us-east-1
+      - key: REDIS_URL
+        fromService:
+          name: leo-trainer-redis
+          type: redis
+          property: connectionString
