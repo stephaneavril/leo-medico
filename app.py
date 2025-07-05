@@ -1026,10 +1026,6 @@ def log_full_session():
         if conn:
             conn.close()
 
-
-app = Flask(__name__)
-app.secret_key = os.getenv("FLASK_SECRET", "changeme")
-
 # --- helper corto ---
 def get_db():
     p = urlparse(DATABASE_URL)
