@@ -673,7 +673,6 @@ def start_session():
                 SELECT active, start_date, end_date
                 FROM users
                 WHERE email = %s
-                    AND visible_to_user = TRUE
             """, (email,))
             row = cur.fetchone()
     finally:
