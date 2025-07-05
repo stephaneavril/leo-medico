@@ -232,6 +232,7 @@ def init_db():
             duration_seconds INTEGER DEFAULT 0,
             tip TEXT,
             visual_feedback TEXT,
+            visible_to_user BOOLEAN DEFAULT FALSE,
             avatar_transcript TEXT
         );"""
     )

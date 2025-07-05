@@ -157,7 +157,9 @@ def init_db():
                 evaluation_rh TEXT,
                 duration_seconds INTEGER DEFAULT 0,
                 tip TEXT,
-                visual_feedback TEXT
+                visual_feedback TEXT,
+                visible_to_user BOOLEAN DEFAULT FALSE,
+                avatar_transcript TEXT
             );
         ''')
         c.execute('''
