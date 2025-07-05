@@ -29,7 +29,8 @@ interface DashboardData {
   used_seconds: number;
 }
 
-// Valores especiales que indican que el video no está listo\const SENTINELS = [
+// Valores especiales que indican que el video no está listo
+const SENTINELS = [
   'Video_Not_Available_Error',
   'Video_Processing_Failed',
   'Video_Missing_Error',
