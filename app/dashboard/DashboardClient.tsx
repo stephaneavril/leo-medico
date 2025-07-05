@@ -119,7 +119,12 @@ export default function DashboardClient({
       {/* =========== ESTILOS GLOBAL ============ */}
       <style jsx global>{`
         @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700&family=Open+Sans:wght@400;600&display=swap');
-
+html,
+  body,
+  .dashboard-page-container {
+    background: #f4f6fa !important;   /* gris claro corporativo   */
+    color: #222 !important;           /* texto oscuro legible    */
+  }
         :root {
           --primary-dark: #0c0e2c;
           --primary-mid: #003559;
