@@ -123,10 +123,7 @@
     }
     .evaluation.rh h4{color:var(--secondary-red);margin:15px 0 5px;font:600 1em 'Montserrat'}
 
-    .metric-line{
-      display:flex;justify-content:space-between;
-      padding:5px 0;border-bottom:1px dashed #f0c0c0;font-size:.95em
-    }
+    .metric-line{display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px dashed #f0c0c0;font-size:.95em}
     .metric-line:last-child{border-bottom:none;}
 
     /* ---------- TABLAS ---------- */
@@ -225,7 +222,7 @@
           <div class="evaluation">
             <strong>Resumen para usuario:</strong><br>{{ row[8] }}
           </div>
-
+        <!-- Análisis RH (si existe) -->
           {% if row[9].overall_rh_summary %}
           <div class="evaluation rh">
             <strong>Análisis para RH:</strong>
@@ -260,34 +257,51 @@
           </div>
           {% endif %}
 
-          <!-- BOTÓN ELIMINAR -->
+      <!-- FORMULARIO ELIMINAR -->
           <div style="margin-top:20px;text-align:right">
-            <form action="/admin/delete_session/{{ row[0] }}" method="POST" onsubmit="return confirm('¿Estás seguro de que quieres eliminar esta sesión y su video?');">
-              <button type="submit" style="background:#dc3545;color:white;padding:8px 15px;border-radius:5px;border:none;cursor:pointer">🗑️ Eliminar Sesión</button>
+            <form action="/admin/delete_session/{{ row[0] }}" method="POST"
+                  onsubmit="return confirm('¿Estás seguro de eliminar esta sesión?');">
+              <button type="submit" style="background:#dc3545;color:#fff;padding:8px 15px;border-radius:5px">
+                🗑️ Eliminar Sesión
+              </button>
             </form>
           </div>
         </div>
 
-        <!-- BOTÓN PUBLICAR / ESTADO -->
-{% if not row[12] %}
-  <form action="/admin/publish_eval/{{ row[0] }}" method="POST" style="margin-top:12px">
-    <button type="submit">✅ Publicar al usuario</button>
-  </form>
-{% else %}
-  <p style="color:green;font-weight:600;margin-top:12px">Publicado en dashboard</p>
-{% endif %}
-
-        <!-- VIDEO -->
+        
+ <!-- COLUMNA 2 ────────────────────────────────────────────── -->
         <div>
-        {% if row[6] and row[6] not in ["Video_Not_Available_Error","Video_Processing_Failed","Video_Missing_Error"] %}
-          <video controls><source src="{{ row[6] }}" type="video/mp4">Tu navegador no soporta video.</video>
-        {% else %}
-          <p style="color:gray;text-align:center">⏳ Esta sesión aún se está procesando o no tiene video.</p>
-        {% endif %}
+          <!-- VIDEO -->
+          {% if row[6] and row[6] not in [
+                 'Video_Not_Available_Error','Video_Processing_Failed','Video_Missing_Error'] %}
+            <video controls>
+              <source src="{{ row[6] }}" type="video/mp4">Tu navegador no soporta video.
+            </video>
+          {% else %}
+            <p style="color:gray;text-align:center;margin-bottom:16px">
+              ⏳ Video en procesamiento o no disponible
+            </p>
+          {% endif %}
+       <!-- COMENTARIO RH + PUBLICAR -->
+          <form action="/admin/publish_eval/{{ row[0] }}" method="POST" style="margin-top:20px">
+            <label for="comment_{{ row[0] }}"><strong>Comentario RH:</strong></label><br>
+            <textarea id="comment_{{ row[0] }}" name="comment_rh"
+                      rows="4" style="width:100%;margin-top:6px"
+                      placeholder="Escribe tu feedback…">{{ row[9].rh_comment if row[9] else '' }}</textarea>
+
+            {% if not row[12] %}
+              <button type="submit" style="margin-top:10px;width:100%">
+                ✅ Publicar al usuario
+              </button>
+            {% else %}
+              <p style="color:green;font-weight:600;margin-top:12px;text-align:center">
+                Publicado en dashboard
+              </p>
+            {% endif %}
+          </form>
         </div>
       </div>
     {% endfor %}
-
     <!-- ===== RESUMEN DE USO ===== -->
     <h2 class="section-title">📈 Resumen de Tiempo por Usuario</h2>
     <div class="summary-row">
