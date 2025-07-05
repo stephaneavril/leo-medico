@@ -17,6 +17,7 @@ import boto3
 from botocore.exceptions import ClientError
 import re
 from celery_worker import process_session_video
+from flask import Flask, request, redirect, url_for, flash, render_template
 
 
 # 1) Carga variables de entorno
@@ -669,6 +670,7 @@ def start_session():
             cur.execute("""
                 SELECT active, start_date, end_date
                 FROM users WHERE email = %s
+                    AND visible_to_user = TRUE
             """, (email,))
             row = cur.fetchone()
     finally:
@@ -1023,6 +1025,43 @@ def log_full_session():
     finally:
         if conn:
             conn.close()
+
+
+app = Flask(__name__)
+app.secret_key = os.getenv("FLASK_SECRET", "changeme")
+
+# --- helper corto ---
+def get_db():
+    p = urlparse(DATABASE_URL)
+    return psycopg2.connect(
+        database=p.path.lstrip("/"),
+        user=p.username,
+        password=p.password,
+        host=p.hostname,
+        port=p.port,
+        sslmode="require",
+    )
+
+# ---------- NUEVO ENDPOINT ----------
+@app.route("/admin/publish_eval/<int:sid>", methods=["POST"])
+def publish_eval(sid: int):
+    """RH pulsa 'Publicar'. Copia comentario RH y lo hace visible al usuario."""
+    comment_rh = request.form.get("comment_rh", "").strip()
+
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            # guarda el comentario RH  y marca visible
+            cur.execute(
+                """
+                UPDATE interactions
+                   SET evaluation_rh = %s,
+                        visible_to_user = TRUE
+                 WHERE id = %s;
+                """,
+                (comment_rh or '', sid)
+            )
+    flash(f"Sesión {sid} publicada al usuario ✅", "success")
+    return redirect(url_for("admin"))  # o a donde corresponda
 
 @app.route("/healthz")
 def health_check():
