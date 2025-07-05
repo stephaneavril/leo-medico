@@ -671,7 +671,8 @@ def start_session():
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT active, start_date, end_date
-                FROM users WHERE email = %s
+                FROM users
+                WHERE email = %s
                     AND visible_to_user = TRUE
             """, (email,))
             row = cur.fetchone()
@@ -1059,7 +1060,7 @@ def publish_eval(sid: int):
                 (comment_rh or '', sid)
             )
     flash(f"Sesión {sid} publicada al usuario ✅", "success")
-    return redirect(url_for("admin"))  # o a donde corresponda
+    return redirect(url_for("admin_panel"))  # o a donde corresponda
 
 @app.route("/healthz")
 def health_check():
