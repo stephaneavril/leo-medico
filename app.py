@@ -194,13 +194,13 @@ def patch_db_schema():
         # -------- Tabla interactions --------
         c.execute("""
             SELECT column_name
-              FROM information_schema.columns
-             WHERE table_name = 'interactions'
-               AND column_name = 'evaluation_rh';
+            FROM information_schema.columns
+            WHERE table_name = 'interactions'
+            AND column_name = 'rh_comment';
         """)
         if not c.fetchone():
-            c.execute("ALTER TABLE interactions ADD COLUMN evaluation_rh TEXT;")
-            print("Added 'evaluation_rh' to interactions table.")
+            c.execute("ALTER TABLE interactions ADD COLUMN rh_comment TEXT;")
+            print("Added 'rh_comment' to interactions table.")
 
         c.execute("""
             SELECT column_name
@@ -483,7 +483,7 @@ def admin_panel():
         c.execute("""
             SELECT id, name, email, scenario, message, response, audio_path,
                     timestamp, evaluation, evaluation_rh, tip, visual_feedback,
-                    visible_to_user          -- ← NUEVO
+                    visible_to_user         
             FROM interactions
             ORDER BY timestamp DESC
         """)
@@ -788,89 +788,95 @@ def jwt_required(f):
 @cross_origin()
 @jwt_required
 def dashboard_data():
-    # El email ahora viene del token decodificado por @jwt_required, lo cual es seguro.
     email = request.jwt["email"]
-    conn = None
+    conn  = None
     try:
-        # La validación extra con check_user_token se ha eliminado porque es redundante
-        # y causaba el error 'name 'token' is not defined'. 
-        # El decorador @jwt_required ya protege esta ruta.
-        
-        print(f"DEBUG_DASHBOARD_FLOW: Petición para el email '{email}' validada por JWT.")
+        print(f"[DEBUG_DASHBOARD] JWT ok para {email}")
 
-        # 2) Consulta de sesiones y cálculo de tiempo
+        # 1. Traemos las sesiones de la BD
         conn = get_db_connection()
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            # --- Tu lógica para consultar la base de datos se mantiene intacta ---
-            sql_query = """
-                SELECT
-                    id, scenario, timestamp AS created_at, duration_seconds AS duration,
-                    message AS user_transcript, response AS avatar_transcript,
-                    evaluation AS coach_advice, visual_feedback,
-                    audio_path AS video_s3, tip, evaluation_rh AS rh_evaluation
-                FROM interactions
-                WHERE email = %s
-                ORDER BY timestamp DESC
-                LIMIT 50;
-            """
-            cur.execute(sql_query, (email,))
-            raw_rows = cur.fetchall()
-            sessions_to_send_to_frontend = []
-            
-            # (El resto de tu bucle for para procesar las filas se queda igual)
-            for i, row_dict in enumerate(raw_rows):
-                processed_session = dict(row_dict)
-                # ... (procesamiento de transcripciones)
-                user_transcript_raw = processed_session.get("user_transcript", "[]")
-                try:
-                    processed_session["user_transcript"] = "\n".join(json.loads(user_transcript_raw))
-                except (json.JSONDecodeError, TypeError):
-                    processed_session["user_transcript"] = user_transcript_raw
-
-                avatar_transcript_raw = processed_session.get("avatar_transcript", "[]")
-                try:
-                    processed_session["avatar_transcript"] = "\n".join(json.loads(avatar_transcript_raw))
-                except (json.JSONDecodeError, TypeError):
-                    processed_session["avatar_transcript"] = avatar_transcript_raw
-                # ... (procesamiento del resto de campos)
-                
-                s3_key = processed_session.get("video_s3")
-                if s3_key and s3_key not in SENTINELS:
-                    try:
-                        processed_session["video_s3"] = s3_client.generate_presigned_url(
-                            ClientMethod='get_object',
-                            Params={'Bucket': AWS_S3_BUCKET_NAME, 'Key': s3_key},
-                            ExpiresIn=3600
-                        )
-                    except ClientError as e:
-                        processed_session["video_s3"] = None
-                else:
-                    processed_session["video_s3"] = None
-
-                sessions_to_send_to_frontend.append(processed_session)
-
-            # --- Segunda consulta: Total de segundos usados ---
             cur.execute(
-                "SELECT COALESCE(SUM(duration_seconds), 0) AS total_seconds_used FROM interactions WHERE email = %s;",
+                """
+                SELECT id, scenario, timestamp AS created_at,
+                       duration_seconds AS duration,
+                       message  AS user_transcript,
+                       response AS avatar_transcript,
+                       evaluation       AS coach_advice,
+                       rh_comment,
+                       visual_feedback,
+                       audio_path       AS video_s3,
+                       tip,
+                       evaluation_rh    AS rh_evaluation,
+                       visible_to_user
+                FROM   interactions
+                WHERE  email = %s
+                ORDER BY timestamp DESC
+                LIMIT  50;
+                """,
                 (email,)
             )
-            result = cur.fetchone()
-            total_used_seconds = result["total_seconds_used"] if result else 0
+            raw_rows = cur.fetchall()
 
+        sessions_to_send = []
+        for row in raw_rows:
+            processed = dict(row)           # ← copia mutable
+
+            # ── 1. Transcripciones a texto plano ─────────────────
+            for field in ("user_transcript", "avatar_transcript"):
+                raw = processed.get(field, "[]")
+                try:
+                    processed[field] = "\n".join(json.loads(raw))
+                except (json.JSONDecodeError, TypeError):
+                    processed[field] = raw
+
+            # ── 2. URL firmada del video (si aplica) ────────────
+            s3_key = processed.get("video_s3")
+            if s3_key and s3_key not in SENTINELS:
+                try:
+                    processed["video_s3"] = s3_client.generate_presigned_url(
+                        ClientMethod='get_object',
+                        Params={'Bucket': AWS_S3_BUCKET_NAME, 'Key': s3_key},
+                        ExpiresIn=3600
+                    )
+                except ClientError:
+                    processed["video_s3"] = None
+            else:
+                processed["video_s3"] = None
+
+            # ── 3. Mostrar/ocultar análisis según visible_to_user ─
+            if processed.get("visible_to_user"):
+                processed["coach_advice"]  = processed.get("coach_advice", "")
+                processed["rh_evaluation"] = processed.get("rh_comment", "")
+            else:
+                processed["coach_advice"]  = ""
+                processed["rh_evaluation"] = ""
+
+            sessions_to_send.append(processed)   # ¡solo una vez!
+
+        # 4. Minutos usados
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT COALESCE(SUM(duration_seconds),0) FROM interactions WHERE email=%s",
+                (email,)
+            )
+            total_used_seconds = cur.fetchone()[0]
+
+        # 5. Enviamos respuesta
         auth_header = request.headers.get("Authorization", "")
-        user_token = auth_header.replace("Bearer ", "") if auth_header.startswith("Bearer ") else auth_header
+        user_token  = auth_header.replace("Bearer ", "") if auth_header.startswith("Bearer ") else auth_header
 
-        return jsonify({
-            "name": request.jwt["name"],          # 👈 nombre sacado del propio JWT
-            "email": email,                       # 👈 email del mismo JWT
-            "user_token": user_token,             # 👈 ahora sí lo enviamos al front
-            "sessions": sessions_to_send_to_frontend,
-            "used_seconds": total_used_seconds
-        }), 200
+        return jsonify(
+            name         = request.jwt["name"],
+            email        = email,
+            user_token   = user_token,
+            sessions     = sessions_to_send,
+            used_seconds = total_used_seconds
+        ), 200
 
     except Exception as e:
-        app.logger.exception("dashboard_data error general - EXCEPCIÓN CAPTURADA")
-        return jsonify({"error": f"Error interno del servidor al obtener datos del dashboard: {str(e)}"}), 500
+        app.logger.exception("dashboard_data – error")
+        return jsonify(error=f"Error interno: {e}"), 500
     finally:
         if conn:
             conn.close()
@@ -1041,25 +1047,27 @@ def get_db():
     )
 
 # ---------- NUEVO ENDPOINT ----------
-@app.route("/admin/publish_eval/<int:sid>", methods=["POST"])
+@app.post("/admin/publish_eval/<int:sid>")
 def publish_eval(sid: int):
-    """RH pulsa 'Publicar'. Copia comentario RH y lo hace visible al usuario."""
-    comment_rh = request.form.get("comment_rh", "").strip()
+    comment = (request.form.get("comment_rh") or "").strip()
+    with get_db() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE interactions SET rh_comment = %s, visible_to_user = TRUE WHERE id = %s;",
+            (comment, sid)
+        )
+    flash(f"Sesión {sid} publicada con comentario RH ✅", "success")
+    return redirect(url_for("admin_panel"))
 
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            # guarda el comentario RH  y marca visible
-            cur.execute(
-                """
-                UPDATE interactions
-                   SET evaluation_rh = %s,
-                        visible_to_user = TRUE
-                 WHERE id = %s;
-                """,
-                (comment_rh or '', sid)
-            )
-    flash(f"Sesión {sid} publicada al usuario ✅", "success")
-    return redirect(url_for("admin_panel"))  # o a donde corresponda
+@app.post("/admin/publish_ai/<int:sid>")
+def publish_ai(sid: int):
+    """Marca la sesión como visible sin añadir comentario RH."""
+    with get_db() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE interactions SET rh_comment = NULL, visible_to_user = TRUE WHERE id = %s;",
+            (sid,)
+        )
+    flash(f"Sesión {sid} publicada con análisis IA ✅", "success")
+    return redirect(url_for("admin_panel"))
 
 @app.route("/healthz")
 def health_check():

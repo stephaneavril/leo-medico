@@ -302,6 +302,18 @@
         </div>
       </div>
     {% endfor %}
+
+    <!-- PUBLICAR IA TAL CUAL -->
+<form action="/admin/publish_ai/{{ row[0] }}" method="POST" style="display:inline">
+  <button type="submit">🤖 Publicar IA</button>
+</form>
+
+<!-- PUBLICAR MI COMENTARIO -->
+<form action="/admin/publish_eval/{{ row[0] }}" method="POST" style="display:inline">
+  <textarea name="comment_rh" rows="3" placeholder="Escribe tu feedback…"></textarea>
+  <button type="submit">✍️ Publicar mi comentario</button>
+</form>
+
     <!-- ===== RESUMEN DE USO ===== -->
     <h2 class="section-title">📈 Resumen de Tiempo por Usuario</h2>
     <div class="summary-row">

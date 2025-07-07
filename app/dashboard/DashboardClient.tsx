@@ -305,7 +305,7 @@ html,
 
           <div className="card-grid">
             <div className="card">
-              <h3>Entrevista con médico</h3>
+              <h3>Dar retroalimentación a un representante</h3>
               <Link
                 href={{
                   pathname: '/interactive-session',
@@ -337,14 +337,14 @@ html,
             </p>
           </div>
 
-          {/* ---------- Historial de sesiones ---------- */}
+        {/* ---------- Historial de sesiones ---------- */}
           <div className="session-log">
             <h2 className="section-title">Tus sesiones anteriores</h2>
 
-            {records.length === 0 ? (
-              <p>No has realizado sesiones todavía.</p>
+            {visibleRecords.length === 0 ? (
+              <p>Aún no tienes retroalimentación disponible.</p>
             ) : (
-              records.map((r) => (
+              visibleRecords.map((r) => (
                 <div key={r.id ?? r.created_at} className="session-entry">
                   {/* Columna A */}
                   <div>
@@ -354,9 +354,11 @@ html,
                     </p>
 
                     {/* Resumen IA público */}
-                    <div className="evaluation-box">
-                      <p>{r.coach_advice || 'Análisis IA pendiente…'}</p>
-                    </div>
+                    {r.coach_advice && (
+                      <div className="evaluation-box">
+                        <p>{r.coach_advice}</p>
+                      </div>
+                    )}
 
                     {/* Comentario RH */}
                     {r.rh_evaluation && (
@@ -380,8 +382,7 @@ html,
                     {r.visual_feedback && (
                       <div className="evaluation-box visual-feedback-box">
                         <p>
-                          <strong>Feedback visual:</strong>{' '}
-                          {r.visual_feedback}
+                          <strong>Feedback visual:</strong> {r.visual_feedback}
                         </p>
                       </div>
                     )}
