@@ -100,6 +100,11 @@ export default function DashboardClient({
     video_s3: s.video_s3 && !SENTINELS.includes(s.video_s3) ? s.video_s3 : null,
     created_at: s.created_at ? new Date(s.created_at).toLocaleString() : '',
   }));
+  // ⬇️ Solo mostrar las sesiones que RH o IA ya publicaron
+const visibleRecords = records.filter(
+  (r) => r.coach_advice || r.rh_evaluation
+);
+
 
   // Utilidades
   const formatTime = (seconds: number) => {
