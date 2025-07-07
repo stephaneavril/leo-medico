@@ -282,23 +282,53 @@ Resumen general para RH:
         gpt_internal_structured_feedback = {"error": f"Error inesperado al llamar a GPT: {str(e)}"}
         feedback_level = "error"
 
+    def _normalize(val_dict: dict[str, str]) -> dict[str, str]:
+            """
+            Convierte claves a minúsculas sin tildes para buscarlas de forma segura.
+            """
+            import unicodedata
+            def _clean(k):                               # ej. 'Diagnóstico' -> 'diagnostico'
+                return ''.join(
+                    c for c in unicodedata.normalize('NFD', k.lower())
+                    if unicodedata.category(c) != 'Mn'
+                )
+            return {_clean(k): v for k, v in val_dict.items()}
+
+    fb_norm = _normalize(gpt_internal_structured_feedback)
+
+    gpt_detailed_feedback = {
+            #  ↓↓↓  si no llega nada, dejamos 'N/A' para que la UI lo muestre así
+            "Diagnostico":   fb_norm.get("diagnostico",   "N/A"),
+            "Argumentacion": fb_norm.get("argumentacion", "N/A"),
+            "Validacion":    fb_norm.get("validacion",    "N/A"),
+            "Cierre":        fb_norm.get("cierre",        "N/A"),
+            # si quieres exponer TODO el dict crudo a futuro:
+            "_raw": gpt_internal_structured_feedback,
+        }
+
     final_internal_summary_dict = {
-        "overall_rh_summary": gpt_internal_structured_feedback.get("overall_evaluation", "Evaluación general no disponible del GPT."),
-        "knowledge_score": f"{score}/8",
-        "visual_presence": visual_eval_internal,
-        "visual_percentage": visual_pct,
-        "sales_model_simple_detection": {
-            "diagnostico": '✅' if sales_model_score['diagnostico'] else '❌',
-            "argumentacion": '✅' if sales_model_score['argumentacion'] else '❌',
-            "validacion": '✅' if sales_model_score['validacion'] else '❌',
-            "cierre": '✅' if sales_model_score['cierre'] else '❌',
-            "steps_applied_count": f"{model_applied_steps_count}/4"
-        },
-        "active_listening_simple_detection": 'Alta' if active_listening_score >= 4 else 'Moderada' if active_listening_score >= 2 else 'Baja',
-        "disqualifying_phrases_detected": disqualifying_flag,
-        "gpt_detailed_feedback": gpt_internal_structured_feedback,
-        "error_during_eval": gpt_internal_structured_feedback.get("error", "No error detected from GPT.")
-    }
+            "overall_rh_summary": gpt_internal_structured_feedback.get(
+                "overall_evaluation", "Evaluación general no disponible del GPT."
+            ),
+            "knowledge_score": f"{score}/8",
+            "visual_presence": visual_eval_internal,
+            "visual_percentage": visual_pct,
+            "sales_model_simple_detection": {
+                "diagnostico":   '✅' if sales_model_score['diagnostico']   else '❌',
+                "argumentacion": '✅' if sales_model_score['argumentacion'] else '❌',
+                "validacion":    '✅' if sales_model_score['validacion']    else '❌',
+                "cierre":        '✅' if sales_model_score['cierre']        else '❌',
+                "steps_applied_count": f"{model_applied_steps_count}/4",
+            },
+            "active_listening_simple_detection": (
+                "Alta" if active_listening_score >= 4
+                else "Moderada" if active_listening_score >= 2
+                else "Baja"
+            ),
+            "disqualifying_phrases_detected": disqualifying_flag,
+            "gpt_detailed_feedback": gpt_detailed_feedback,
+            "error_during_eval": gpt_internal_structured_feedback.get("error", ""),
+        }
 
     public_summary_for_user = textwrap.dedent(f"""
         {gpt_public_summary}
