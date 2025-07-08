@@ -20,6 +20,11 @@ Celery worker completo para Leo Coach
 # ───────── CONFIG GLOBAL ─────────
 load_dotenv()
 
+# ⏱️  ------------- NUEVO -------------------
+CELERY_SOFT_LIMIT = int(os.getenv("CELERY_SOFT_LIMIT", 240))   # 4 min (avisa SIGUSR1)
+CELERY_HARD_LIMIT = int(os.getenv("CELERY_HARD_LIMIT", 300))   # 5 min (mata el proceso)
+# ⏱️  -----
+
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 celery_app = Celery("leo_tasks", broker=REDIS_URL, backend=REDIS_URL)
 celery_app.conf.update(task_track_started=True, task_acks_late=True, worker_prefetch_multiplier=1)
@@ -115,7 +120,8 @@ def analyze_video_posture(video_path: str) -> tuple[str, str]:
     return pub, visual
 
 # ─────────  TAREA CELERY ÚNICA ─────────
-@celery_app.task
+@celery_app.task(soft_time_limit=CELERY_SOFT_LIMIT,
+                 time_limit=CELERY_HARD_LIMIT)
 def process_session_video(d: dict):
     sid  = d.get("session_id")
     vkey = d.get("video_object_key")
@@ -161,7 +167,11 @@ def process_session_video(d: dict):
         if st == "COMPLETED":
             uri = transcribe.get_transcription_job(TranscriptionJobName=job)["TranscriptionJob"]["Transcript"]["TranscriptFileUri"]
             user_txt = requests.get(uri).json()["results"]["transcripts"][0]["transcript"]
-
+ 
+    # ────────────── AQUÍ AÑADES EL RECORTE ──────────────
+    MAX_CHARS = 24_000           # 24 000 ≈ 6-7 páginas de texto.
+    user_txt = user_txt[-MAX_CHARS:]
+    # ────────────────────────────────────────────────────
     # 5· Evaluación con OpenAI
     try:
         res = evaluate_interaction(user_txt, "", mp4)
