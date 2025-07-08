@@ -16,7 +16,6 @@ import openai
 import boto3
 from botocore.exceptions import ClientError
 import re
-from celery_worker import process_session_video
 from flask import Flask, request, redirect, url_for, flash, render_template
 
 
@@ -999,17 +998,13 @@ def log_full_session():
             )
             session_id = cur.fetchone()[0]
         conn.commit()
-
-        from celery_worker import process_session_video
-        process_session_video.delay({
-            "session_id": session_id,           # ← ya lo tienes arriba
-            "video_object_key": s3_object_key,  # variable que subiste en upload_video
-            "duration": duration                # idem
-        })
-
+        
         print(f"[DB] Sesión #{session_id} registrada correctamente.")
+        
 
         # ───────── LANZA LA TAREA CELERY ─────────
+        from celery_worker import process_session_video 
+        
         task_data = {
             "session_id":       session_id,
             "name":             name,
