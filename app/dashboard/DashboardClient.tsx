@@ -310,7 +310,7 @@ html,
 
           <div className="card-grid">
             <div className="card">
-              <h3>Dar retroalimentación a un representante</h3>
+              <h3>Entrevista con Médico</h3>
               <Link
                 href={{
                   pathname: '/interactive-session',

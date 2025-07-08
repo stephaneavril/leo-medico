@@ -27,7 +27,7 @@ celery_app.conf.update(task_track_started=True, task_acks_late=True, worker_pref
 TMP_DIR = "/tmp/leo_trainer_processing"
 os.makedirs(TMP_DIR, exist_ok=True)
 
-AWS_S3_BUCKET_NAME = os.getenv("AWS_S3_BUCKET_NAME", "leocoach").split("#", 1)[0].strip("'\"")
+AWS_S3_BUCKET_NAME = os.getenv("AWS_S3_BUCKET_NAME", "leotrainer2").split("#", 1)[0].strip("'\"")
 AWS_S3_REGION_NAME = os.getenv("AWS_S3_REGION_NAME", "us-east-1")
 AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
 AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
