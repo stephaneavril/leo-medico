@@ -114,7 +114,7 @@ const visibleRecords = records.filter(
   };
 
   const maxSeconds = 1_800; // 30 min
-  const defaultScenario = 'Coaching con gerente';
+  const defaultScenario = 'Entrevista con médico';
 
   // ────────────────────────────────────────────
   // 3.  Render
@@ -307,7 +307,18 @@ html,
         <div className="container-content">
           {/* ---------- Selección de escenario ---------- */}
           <h2 className="section-title">Selecciona tu entrenamiento</h2>
-
+<section style={{marginTop: '24px'}}>
+  <h2 className="section-title">Cómo aprovechar a Leo en 7 pasos</h2>
+  <ol style={{paddingLeft: '20px', lineHeight: '1.6'}}>
+    <li>Elige el escenario de entrenamiento que necesitas.</li>
+    <li>Activa cámara y micrófono; verifica que todo funcione.</li>
+    <li>Haz clic en <strong>Iniciar Chat de Voz</strong> y saluda al avatar con "Buenos días Doctora".</li>
+    <li>Plantea tu objetivo: diagnóstico, beneficio o cierre.</li>
+    <li>Aplica el modelo Da Vinci y escucha las objeciones.</li>
+    <li>Dispones de 8 minutos por sesion y 30 minutos en el mes.</li>
+    <li>Cuando terminas tu entrevista desconectate. Las personas de Capacitación revisarán con el apoyo de Inteligencia artificial y ofrecerán feedcback. Puede demorar algunas horas. Revisa tu análisis y repite la sesión enfocándote en un punto a mejorar.</li>
+  </ol>
+</section>
           <div className="card-grid">
             <div className="card">
               <h3>Entrevista con Médico</h3>
