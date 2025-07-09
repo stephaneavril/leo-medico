@@ -9,7 +9,7 @@ services:
 
   # ─────────── BACKEND FLASK ───────────
   - type: web
-    name: leo-backend
+    name: leo-medico
     env: python
     region: oregon
     branch: main
@@ -27,7 +27,7 @@ services:
       - key: AWS_SECRET_ACCESS_KEY
         sync: false
       - key: AWS_S3_BUCKET_NAME
-        value: leocoach
+        value: leotrainer2
       - key: AWS_S3_REGION_NAME
         value: us-east-1
       - key: REDIS_URL
@@ -38,12 +38,12 @@ services:
 
   # ─────────── CELERY WORKER ───────────
   - type: worker
-    name: leo-trainer-worker
+    name: leo-medico-worker
     env: python
     region: oregon
     branch: main
     buildCommand: pip install -r requirements.txt
-    startCommand: celery -A celery_worker.celery_app worker --loglevel=info -c 5
+    startCommand: celery -A celery_worker.celery_app worker --loglevel=info --pool=solo
     envVars:
       - key: DATABASE_URL
         sync: false
@@ -56,7 +56,7 @@ services:
       - key: AWS_SECRET_ACCESS_KEY
         sync: false
       - key: AWS_S3_BUCKET_NAME
-        value: leocoach
+        value: leotrainer2
       - key: AWS_S3_REGION_NAME
         value: us-east-1
       - key: REDIS_URL
