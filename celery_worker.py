@@ -21,8 +21,8 @@ Celery worker completo para Leo Coach
 load_dotenv()
 
 # ⏱️  ------------- NUEVO -------------------
-CELERY_SOFT_LIMIT = int(os.getenv("CELERY_SOFT_LIMIT", 240))   # 4 min (avisa SIGUSR1)
-CELERY_HARD_LIMIT = int(os.getenv("CELERY_HARD_LIMIT", 300))   # 5 min (mata el proceso)
+CELERY_SOFT_LIMIT = int(os.getenv("CELERY_SOFT_LIMIT", 600))   # 10 min (avisa SIGUSR1)
+CELERY_HARD_LIMIT = int(os.getenv("CELERY_HARD_LIMIT", 660))   # 11 min (mata el proceso)
 # ⏱️  -----
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
