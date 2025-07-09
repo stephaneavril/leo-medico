@@ -39,6 +39,10 @@ services:
   # ─────────── CELERY WORKER ───────────
   - type: worker
     name: leo-medico-worker
+    plan: starter
+    autoscale:
+    minInstances: 1        # ← siempre 1 instancia viva
+    maxInstances: 1 
     env: python
     region: oregon
     branch: main
