@@ -44,7 +44,7 @@ services:
     region: oregon
     branch: main
     dockerfilePath: ./Dockerfile       # o Dockerfile.worker si lo renombraste
-    plan: pro
+    plan: pro-plus
     entrypoint: ""
     autoscale:
       minInstances: 1
@@ -52,7 +52,8 @@ services:
     command: >               # ← ESTA línea lo arranca como Celery
       celery -A celery_worker.celery_app worker
              --pool=prefork
-             --autoscale=4,1
+             --autoscale=8,2
+             --soft-time-limit 1200
              --loglevel=info
              --heartbeat-interval 20
              --without-gossip --without-mingle
