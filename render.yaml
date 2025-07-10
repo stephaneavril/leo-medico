@@ -45,8 +45,8 @@ services:
     dockerfilePath: Dockerfile       # o Dockerfile.worker si lo renombraste
     plan: starter
     autoscale:
-      minInstances: 1
-      maxInstances: 1
+        minInstances: 1
+        maxInstances: 1
     envVars:                         # las mismas que ya tenías
       - key: DATABASE_URL
         sync: false
