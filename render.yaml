@@ -15,6 +15,7 @@ services:
     branch: main
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn app:app
+    plan: pro
     envVars:
       - key: DATABASE_URL
         sync: false
@@ -42,11 +43,18 @@ services:
     env: docker                      # ← cambia python → docker
     region: oregon
     branch: main
-    dockerfilePath: Dockerfile       # o Dockerfile.worker si lo renombraste
-    plan: starter
+    dockerfilePath: ./Dockerfile       # o Dockerfile.worker si lo renombraste
+    plan: pro
     autoscale:
         minInstances: 1
         maxInstances: 1
+    command: >               # ← ESTA línea lo arranca como Celery
+      celery -A celery_worker.celery_app worker
+             --pool=prefork
+             --autoscale=4,1
+             --loglevel=info
+             --heartbeat-interval 20
+             --without-gossip --without-mingle
     envVars:                         # las mismas que ya tenías
       - key: DATABASE_URL
         sync: false
