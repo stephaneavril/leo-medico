@@ -36,19 +36,18 @@ services:
           type: redis
           property: connectionString
 
-  # ─────────── CELERY WORKER ───────────
+    # ─────────── CELERY WORKER (Docker) ───────────
   - type: worker
-    name: leo-medico-worker
-    plan: starter
-    autoscale:
-    minInstances: 1        # ← siempre 1 instancia viva
-    maxInstances: 1 
-    env: python
+    name: leo-medico-worker          # el mismo nombre de antes
+    env: docker                      # ← cambia python → docker
     region: oregon
     branch: main
-    buildCommand: pip install -r requirements.txt
-    startCommand: celery -A celery_worker.celery_app worker --loglevel=info --pool=solo
-    envVars:
+    dockerfilePath: Dockerfile       # o Dockerfile.worker si lo renombraste
+    plan: starter
+    autoscale:
+      minInstances: 1
+      maxInstances: 1
+    envVars:                         # las mismas que ya tenías
       - key: DATABASE_URL
         sync: false
       - key: OPENAI_API_KEY
