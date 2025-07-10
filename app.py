@@ -1015,9 +1015,12 @@ def log_full_session():
             "user_transcript":  user_json,
             "avatar_transcript": avatar_json
         }   
-        process_session_video.delay(task_data)
-        # ─────────────────────────────────────────
+        app.logger.info("🗂  Sesión %s guardada → ENCOLANDO", session_id)
 
+        result = process_session_video.delay(task_data)
+
+        app.logger.info("🚀  Sesión %s ENCOLADA (task_id=%s)", session_id, result.id)
+        # ─────────────────────────────────────────
         return jsonify(
             {
                 "status": "success",
