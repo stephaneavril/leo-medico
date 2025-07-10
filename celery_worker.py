@@ -27,7 +27,16 @@ CELERY_HARD_LIMIT = int(os.getenv("CELERY_HARD_LIMIT", 660))   # 11 min (mata el
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 celery_app = Celery("leo_tasks", broker=REDIS_URL, backend=REDIS_URL)
-celery_app.conf.update(task_track_started=True, task_acks_late=True, worker_prefetch_multiplier=1)
+# 🔊–– ACTIVA LOGS EN INFO Y EVITA QUE CELERY LOS SILENCIE
+celery_app.conf.update(
+    task_track_started=True,
+    task_acks_late=True,
+    worker_prefetch_multiplier=1,
+    worker_hijack_root_logger=False,                 # <–– línea clave
+    worker_log_format="%(asctime)s %(levelname)s %(message)s",
+)
+import logging
+logging.basicConfig(level=logging.INFO, force=True)  # <–– fuerza nivel INFO
 
 TMP_DIR = "/tmp/leo_trainer_processing"
 os.makedirs(TMP_DIR, exist_ok=True)
