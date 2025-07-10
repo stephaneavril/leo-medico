@@ -124,24 +124,25 @@ logging.basicConfig(level=logging.INFO)
 
 # ─────────  TAREA CELERY ÚNICA ─────────
 @celery_app.task(
+    soft_@celery_app.task(
     soft_time_limit=CELERY_SOFT_LIMIT,
     time_limit=CELERY_HARD_LIMIT,
     bind=True,
-    name="celery_worker.process_session_video"
+    name="celery_worker.process_session_video",
 )
 def process_session_video(self, d: dict):
     logging.info("🟢 START %s payload=%s", self.request.id, d)
 
-    try:
+    try:                                                # ← comienza el try
         sid  = d.get("session_id")
         vkey = d.get("video_object_key")
         dur  = int(d.get("duration", 0))
         ts_iso = datetime.utcnow().isoformat()
 
-    if not vkey:
-        _update_db(sid, "⚠️ Tarea sin video_object_key")
-        print(f"[WARN] session {sid}: video_object_key missing")
-        return
+        if not vkey:
+            _update_db(sid, "⚠️ Tarea sin video_object_key")
+            logging.warning("🚫 session %s: video_object_key missing", sid)
+            return
 
     # 1· Descarga WEBM
     webm = os.path.join(TMP_DIR, vkey)
