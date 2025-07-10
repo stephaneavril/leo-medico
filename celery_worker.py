@@ -124,7 +124,6 @@ logging.basicConfig(level=logging.INFO)
 
 # ─────────  TAREA CELERY ÚNICA ─────────
 @celery_app.task(
-    soft_@celery_app.task(
     soft_time_limit=CELERY_SOFT_LIMIT,
     time_limit=CELERY_HARD_LIMIT,
     bind=True,
@@ -133,83 +132,94 @@ logging.basicConfig(level=logging.INFO)
 def process_session_video(self, d: dict):
     logging.info("🟢 START %s payload=%s", self.request.id, d)
 
-    try:                                                # ← comienza el try
-        sid  = d.get("session_id")
-        vkey = d.get("video_object_key")
-        dur  = int(d.get("duration", 0))
+    try:
+        sid   = d.get("session_id")
+        vkey  = d.get("video_object_key")
+        dur   = int(d.get("duration", 0))
         ts_iso = datetime.utcnow().isoformat()
 
+        # ─── 0. Validaciones rápidas ───
         if not vkey:
             _update_db(sid, "⚠️ Tarea sin video_object_key")
             logging.warning("🚫 session %s: video_object_key missing", sid)
             return
 
-    # 1· Descarga WEBM
-    webm = os.path.join(TMP_DIR, vkey)
-    if not dl_s3(AWS_S3_BUCKET_NAME, vkey, webm):
-        _update_db(sid, "⚠️ Video no encontrado en S3")
-        return
+        # 1· Descarga WEBM
+        webm = os.path.join(TMP_DIR, vkey)
+        if not dl_s3(AWS_S3_BUCKET_NAME, vkey, webm):
+            _update_db(sid, "⚠️ Video no encontrado en S3")
+            return
 
-    # 2· Convierte a MP4
-    mp4 = webm.replace(".webm", ".mp4")
-    ffmpeg(["ffmpeg", "-i", webm, "-c:v", "libx264", "-preset", "fast", "-c:a", "aac", "-y", mp4])
-
-    # 3· Analiza postura / cara
-    posture_pub, posture_json = analyze_video_posture(mp4)
-
-    # 4· Extrae audio y transcribe
-    wav = webm.replace(".webm", ".wav")
-    ffmpeg(["ffmpeg", "-i", mp4, "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", "-y", wav])
-    audio_url = up_s3(wav, AWS_S3_BUCKET_NAME, f"audio/{os.path.basename(wav)}")
-    user_txt = ""
-    if audio_url:
-        job = f"leo-{secrets.token_hex(6)}"
-        transcribe.start_transcription_job(
-            TranscriptionJobName=job,
-            Media={"MediaFileUri": audio_url},
-            MediaFormat="wav",
-            LanguageCode="es-US",
+        # 2· Convierte a MP4
+        mp4 = webm.replace(".webm", ".mp4")
+        ffmpeg(
+            ["ffmpeg", "-i", webm,
+             "-c:v", "libx264", "-preset", "fast",
+             "-c:a", "aac", "-y", mp4]
         )
-        for _ in range(60):
-            st = transcribe.get_transcription_job(TranscriptionJobName=job)["TranscriptionJob"]["TranscriptionJobStatus"]
-            if st in {"COMPLETED", "FAILED"}:
-                break
-            time.sleep(10)
-        if st == "COMPLETED":
-            uri = transcribe.get_transcription_job(TranscriptionJobName=job)["TranscriptionJob"]["Transcript"]["TranscriptFileUri"]
-            user_txt = requests.get(uri).json()["results"]["transcripts"][0]["transcript"]
- 
-    # ────────────── AQUÍ AÑADES EL RECORTE ──────────────
-    MAX_CHARS = 24_000           # 24 000 ≈ 6-7 páginas de texto.
-    user_txt = user_txt[-MAX_CHARS:]
-    # ────────────────────────────────────────────────────
-    # 5· Evaluación con OpenAI
-    try:
-        res = evaluate_interaction(user_txt, "", mp4)
-        pub_eval = res.get("public", "Evaluación no disponible.")
-        rh_eval  = res.get("internal", {})
-    except Exception as e:
-        pub_eval, rh_eval = "⚠️ Evaluación automática no disponible.", {"error": str(e)}
 
-    # 6· Guarda en BD
-    _update_db(
-        sid,
-        pub_eval,
-        rh_eval,
-        dur,
-        vkey,
-        ts_iso,
-        tip=posture_pub,
-        visual_json=posture_json,
-    )
+        # 3· Analiza postura / cara
+        posture_pub, posture_json = analyze_video_posture(mp4)
 
-    # Limpieza
-    for f in (webm, mp4, wav):
+        # 4· Extrae audio y transcribe
+        wav = webm.replace(".webm", ".wav")
+        ffmpeg(["ffmpeg", "-i", mp4, "-vn",
+                "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", "-y", wav])
+
+        audio_url = up_s3(wav, AWS_S3_BUCKET_NAME, f"audio/{os.path.basename(wav)}")
+        user_txt = ""
+        if audio_url:
+            job = f"leo-{secrets.token_hex(6)}"
+            transcribe.start_transcription_job(
+                TranscriptionJobName=job,
+                Media={"MediaFileUri": audio_url},
+                MediaFormat="wav",
+                LanguageCode="es-US",
+            )
+            for _ in range(60):
+                st = transcribe.get_transcription_job(
+                    TranscriptionJobName=job
+                )["TranscriptionJob"]["TranscriptionJobStatus"]
+                if st in {"COMPLETED", "FAILED"}:
+                    break
+                time.sleep(10)
+            if st == "COMPLETED":
+                uri = transcribe.get_transcription_job(
+                    TranscriptionJobName=job
+                )["TranscriptionJob"]["Transcript"]["TranscriptFileUri"]
+                user_txt = requests.get(uri).json()["results"]["transcripts"][0]["transcript"]
+
+        # ── Recorte por tamaño ──
+        MAX_CHARS = 24_000
+        user_txt = user_txt[-MAX_CHARS:]
+
+        # 5· Evaluación con OpenAI
         try:
-            os.remove(f)
-        except FileNotFoundError:
-            pass
+            res = evaluate_interaction(user_txt, "", mp4)
+            pub_eval = res.get("public",  "Evaluación no disponible.")
+            rh_eval  = res.get("internal", {})
+        except Exception as e:
+            pub_eval, rh_eval = "⚠️ Evaluación automática no disponible.", {"error": str(e)}
 
+        # 6· Guarda en BD
+        _update_db(
+            sid, pub_eval, rh_eval, dur, vkey, ts_iso,
+            tip=posture_pub, visual_json=posture_json,
+        )
+
+    except Exception as e:
+        logging.error("❌ ERROR task %s – %s\n%s",
+                      self.request.id, e, traceback.format_exc())
+        raise
+    finally:
+        # Limpieza de ficheros temporales
+        for f in (locals().get("webm"), locals().get("mp4"), locals().get("wav")):
+            try:
+                if f and os.path.exists(f):
+                    os.remove(f)
+            except FileNotFoundError:
+                pass
+        logging.info("✅ DONE  task %s", self.request.id)
 
 def _update_db(
     sid: int,
