@@ -45,9 +45,10 @@ services:
     branch: main
     dockerfilePath: ./Dockerfile       # o Dockerfile.worker si lo renombraste
     plan: pro
+    entrypoint: ""
     autoscale:
-        minInstances: 1
-        maxInstances: 1
+      minInstances: 1
+      maxInstances: 1
     command: >               # ← ESTA línea lo arranca como Celery
       celery -A celery_worker.celery_app worker
              --pool=prefork
