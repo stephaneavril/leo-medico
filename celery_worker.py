@@ -27,6 +27,8 @@ CELERY_HARD_LIMIT = int(os.getenv("CELERY_HARD_LIMIT", 660))   # 11 min mata
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 celery_app = Celery("leo_tasks", broker=REDIS_URL, backend=REDIS_URL)
+celery_app.conf.imports = ("celery_worker",)
+
 celery_app.conf.update(
     task_track_started=True,
     task_acks_late=True,
