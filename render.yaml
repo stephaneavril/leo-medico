@@ -50,7 +50,7 @@ services:
       minInstances: 1
       maxInstances: 1
     command: >               # ← ESTA línea lo arranca como Celery
-      celery -A celery_worker.celery_app worker
+      celery -A celery_worker_legacy:celery_app worker
              --pool=prefork
              --autoscale=8,2
              --soft-time-limit 1200

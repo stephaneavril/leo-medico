@@ -3,7 +3,7 @@
 Nueva versión del worker que:
 1. Descarga el .webm de S3.
 2. Extrae audio a .wav y lo sube a S3.
-3. Usa AWS Transcribe para generar el **transcript del USUARIO**.
+3. Usa AWS Transcribe para generar el **transcript del USUARIO**.
 4. Invoca `evaluate_interaction(user_text, "", None)` (sin avatar, sin video).
 5. Guarda resultado en PostgreSQL.
 
@@ -22,8 +22,8 @@ from evaluator import evaluate_interaction  # firma: user_text, avatar_text, vid
 # ──────────────────── CONFIG ────────────────────
 load_dotenv()
 
-CELERY_SOFT_LIMIT = int(os.getenv("CELERY_SOFT_LIMIT", 600))   # 10 min avisa
-CELERY_HARD_LIMIT = int(os.getenv("CELERY_HARD_LIMIT", 660))   # 11 min mata
+CELERY_SOFT_LIMIT = int(os.getenv("CELERY_SOFT_LIMIT", 600))   # 10 min avisa
+CELERY_HARD_LIMIT = int(os.getenv("CELERY_HARD_LIMIT", 660))   # 11 min mata
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 celery_app = Celery("leo_tasks", broker=REDIS_URL, backend=REDIS_URL)
@@ -109,7 +109,7 @@ def db_conn():
     soft_time_limit=CELERY_SOFT_LIMIT,
     time_limit=CELERY_HARD_LIMIT,
     bind=True,
-    name="celery_worker.process_session_transcript",
+    name="celery_worker_legacy.process_session_transcript",
 )
 def process_session_transcript(self, payload: dict):
     """Procesa sesión analizando SOLO el transcript del usuario.
@@ -135,13 +135,13 @@ def process_session_transcript(self, payload: dict):
         _update_db(sid, "⚠️ Video no encontrado en S3", vkey=vkey)
         return
 
-    # 2· Extrae audio (wav mono 16 kHz)
+    # 2· Extrae audio (wav mono 16 kHz)
     wav = webm.rsplit(".", 1)[0] + ".wav"
     if not run_ffmpeg(["ffmpeg", "-i", webm, "-vn", "-ar", "16000", "-ac", "1", "-y", wav]):
         _update_db(sid, "⚠️ No se pudo extraer audio", vkey=vkey)
         return
 
-    # 3· Sube audio y lanza AWS Transcribe
+    # 3· Sube audio y lanza AWS Transcribe
     audio_url = up_s3(wav, AWS_S3_BUCKET_NAME, f"audio/{os.path.basename(wav)}")
     user_txt = ""
     if audio_url:

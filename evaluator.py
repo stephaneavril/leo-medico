@@ -8,12 +8,18 @@ import os, json, textwrap
 from datetime import datetime
 from typing import Optional
 
-import cv2                      # pip install opencv-python-headless
+# ── OpenCV opcional ────────────────────────────────────────────────
+try:
+    import cv2                          # pip install opencv-python-headless
+except ImportError:
+    cv2 = None                          # ← evita crash en entornos sin OpenCV
+
 from openai import OpenAI, OpenAIError
 from dotenv import load_dotenv
 
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY", ""))
+
 
 # ────────────────────────────────────────────────────────────────────
 #  Función principal
@@ -23,6 +29,16 @@ def evaluate_interaction(
     leo_text: str,
     video_path: Optional[str] = None,
 ) -> dict:
+    """
+    user_text : diálogo del participante (representante)
+    leo_text  : diálogo del avatar / médico (puede ir vacío)
+    video_path: ruta local del video .mp4 (opcional). Si es None o no hay OpenCV,
+                se omite el análisis visual.
+    Devuelve un dict con:
+        - public  : bloque de texto para mostrar al usuario
+        - internal: JSON detallado para RH
+        - level   : "alto" | "error"
+    """
 
     # ── Heurísticas rápidas ─────────────────────────────────────────
     KW_LIST = [
@@ -48,7 +64,7 @@ def evaluate_interaction(
     def disq_flag(t: str) -> bool:
         return any(w in t.lower() for w in BAD_PHRASES)
 
-    # ── Análisis visual express ─────────────────────────────────────
+    # ── Análisis visual express (solo si hay OpenCV) ────────────────
     def visual_analysis(path: str):
         MAX_FRAMES = int(os.getenv("MAX_FRAMES_TO_CHECK", 60))  # ← configurable
         try:
@@ -84,12 +100,14 @@ def evaluate_interaction(
         except Exception as e:
             return f"⚠️ Error visual: {e}", "Error video", "N/A"
 
+    # decide si ejecutar análisis visual
     vis_pub, vis_int, vis_pct = (
         visual_analysis(video_path)
-        if video_path and os.path.exists(video_path)
+        if video_path and cv2 and os.path.exists(video_path)
         else ("⚠️ Sin video disponible.", "No evaluado", "N/A")
     )
 
+    # ── Detección simple de pasos de venta ──────────────────────────
     sales_model = {
         "diagnostico":   any(w in user_text.lower() for w in ["cómo", "qué", "cuándo", "por qué", "necesita"]),
         "argumentacion": any(w in user_text.lower() for w in ["beneficio", "eficaz", "estudio", "seguridad"]),
