@@ -39,21 +39,20 @@ services:
 
     # ─────────── CELERY WORKER (Docker) ───────────
   - type: worker
-    name: leo-medico-worker          # el mismo nombre de antes
-    env: docker                      # ← cambia python → docker
+    name: leo-medico-worker
+    env: docker
     region: oregon
     branch: main
-    dockerfilePath: ./Dockerfile       # o Dockerfile.worker si lo renombraste
+    dockerfilePath: ./Dockerfile
     plan: pro-plus
-    entrypoint: ""
-    autoscale:
+    autoscale:          # opcional: comenta o ajusta
       minInstances: 1
       maxInstances: 1
+    entrypoint: ""
     command: >
-      celery -A celery_worker:celery_app worker --loglevel=info \
-      --pool=prefork --autoscale=8,2 \
-      --soft-time-limit 1200 --heartbeat-interval 20 \
-      --without-gossip --without-mingle
+      celery -A celery_worker:celery_app worker
+             --loglevel=info
+             --concurrency=4      # <= clave
     envVars:                         # las mismas que ya tenías
       - key: DATABASE_URL
         sync: false
