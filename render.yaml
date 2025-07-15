@@ -49,14 +49,11 @@ services:
     autoscale:
       minInstances: 1
       maxInstances: 1
-    command: >               # ← ESTA línea lo arranca como Celery
-      celery -A celery_worker_legacy:celery_app worker
-             --pool=prefork
-             --autoscale=8,2
-             --soft-time-limit 1200
-             --loglevel=info
-             --heartbeat-interval 20
-             --without-gossip --without-mingle
+    command: >
+      celery -A celery_worker_legacy:celery_app worker --loglevel=info \
+      --pool=prefork --autoscale=8,2 \
+      --soft-time-limit 1200 --heartbeat-interval 20 \
+      --without-gossip --without-mingle
     envVars:                         # las mismas que ya tenías
       - key: DATABASE_URL
         sync: false
