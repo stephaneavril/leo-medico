@@ -1,42 +1,40 @@
+# === celery_worker.py — Análisis SOLO por Transcript (manteniendo transcripción de audio) ===
+"""
+Nueva versión del worker que:
+1. Descarga el .webm de S3.
+2. Extrae audio a .wav y lo sube a S3.
+3. Usa AWS Transcribe para generar el **transcript del USUARIO**.
+4. Invoca `evaluate_interaction(user_text, "", None)` (sin avatar, sin video).
+5. Guarda resultado en PostgreSQL.
+
+No se importa `cv2` ni se analizan frames. El video sigue disponible para que RH lo reproduzca en el panel.
+"""
 from __future__ import annotations
-import os, json, time, subprocess, secrets, requests, cv2
+import os, json, time, subprocess, secrets, requests, logging, traceback
 from datetime import datetime
 from urllib.parse import urlparse
 from dotenv import load_dotenv
 from celery import Celery
 import boto3, psycopg2
 from botocore.exceptions import ClientError
-from evaluator import evaluate_interaction  # firma: user_text, leo_text, video_path
+from evaluator import evaluate_interaction  # firma: user_text, avatar_text, video_path
 
-"""
-Celery worker completo para Leo Coach
-------------------------------------
-• Descarga el video de S3, lo convierte, transcribe y evalúa.
-• Analiza presencia facial y genera tip/postura (OpenCV + cascada, sin MediaPipe para simplificar).
-• Guarda resultado en PostgreSQL.
-• Incluye validación defensiva cuando falta `video_object_key` para que el worker no se caiga.
-"""
-
-# ───────── CONFIG GLOBAL ─────────
+# ──────────────────── CONFIG ────────────────────
 load_dotenv()
 
-# ⏱️  ------------- NUEVO -------------------
-CELERY_SOFT_LIMIT = int(os.getenv("CELERY_SOFT_LIMIT", 600))   # 10 min (avisa SIGUSR1)
-CELERY_HARD_LIMIT = int(os.getenv("CELERY_HARD_LIMIT", 660))   # 11 min (mata el proceso)
-# ⏱️  -----
+CELERY_SOFT_LIMIT = int(os.getenv("CELERY_SOFT_LIMIT", 600))   # 10 min avisa
+CELERY_HARD_LIMIT = int(os.getenv("CELERY_HARD_LIMIT", 660))   # 11 min mata
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 celery_app = Celery("leo_tasks", broker=REDIS_URL, backend=REDIS_URL)
-# 🔊–– ACTIVA LOGS EN INFO Y EVITA QUE CELERY LOS SILENCIE
 celery_app.conf.update(
     task_track_started=True,
     task_acks_late=True,
     worker_prefetch_multiplier=1,
-    worker_hijack_root_logger=False,                 # <–– línea clave
+    worker_hijack_root_logger=False,
     worker_log_format="%(asctime)s %(levelname)s %(message)s",
 )
-import logging
-logging.basicConfig(level=logging.INFO, force=True)  # <–– fuerza nivel INFO
+logging.basicConfig(level=logging.INFO, force=True)
 
 TMP_DIR = "/tmp/leo_trainer_processing"
 os.makedirs(TMP_DIR, exist_ok=True)
@@ -64,8 +62,37 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL env var not set")
 
+# ───────── Helpers S3 / ffmpeg ─────────
 
-def db():
+def dl_s3(bucket: str, key: str, dst: str) -> bool:
+    try:
+        s3.download_file(bucket, key, dst)
+        return True
+    except ClientError as e:
+        logging.error("[S3] %s", e)
+        return False
+
+
+def up_s3(src: str, bucket: str, key: str) -> str | None:
+    try:
+        s3.upload_file(src, bucket, key)
+    except ClientError as e:
+        logging.error("[S3] %s", e)
+        return None
+    return f"https://{bucket}.s3.{AWS_S3_REGION_NAME}.amazonaws.com/{key}"
+
+
+def run_ffmpeg(cmd: list[str]) -> bool:
+    try:
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, check=True)
+        return True
+    except subprocess.CalledProcessError as e:
+        logging.error("[FFMPEG] %s", e.stderr.decode())
+        return False
+
+# ───────── DB helper ─────────
+
+def db_conn():
     p = urlparse(DATABASE_URL)
     return psycopg2.connect(
         database=p.path.lstrip("/"),
@@ -76,159 +103,91 @@ def db():
         sslmode="require",
     )
 
-# ───────── Helpers S3 / ffmpeg ─────────
+# ───────── Celery Task ─────────
 
-def dl_s3(bucket: str, key: str, dst: str) -> bool:
-    try:
-        s3.download_file(bucket, key, dst)
-        return True
-    except ClientError as e:
-        print("[S3]", e)
-        return False
-
-
-def up_s3(src: str, bucket: str, key: str) -> str | None:
-    try:
-        s3.upload_file(src, bucket, key)
-    except ClientError as e:
-        print("[S3]", e)
-        return None
-    return f"https://{bucket}.s3.{AWS_S3_REGION_NAME}.amazonaws.com/{key}"
-
-
-def ffmpeg(cmd: list[str]) -> bool:
-    try:
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, check=True)
-        return True
-    except subprocess.CalledProcessError as e:
-        print("[FFMPEG]", e.stderr.decode())
-        return False
-
-# ───────── Face‑detection sencilla (OpenCV) ─────────
-FACE_CASCADE = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
-
-def analyze_video_posture(video_path: str) -> tuple[str, str]:
-    """Devuelve (public_feedback, visual_json)"""
-    total, detected = 0, 0
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        return "⚠️ No se pudo analizar el video", "{}"
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-        total += 1
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        faces = FACE_CASCADE.detectMultiScale(gray, 1.1, 4)
-        if len(faces):
-            detected += 1
-    cap.release()
-    ratio = detected / total if total else 0
-    pub = "😃 Buen contacto visual" if ratio > 0.7 else "🧐 Trata de mantener la mirada al frente"
-    visual = json.dumps({"frames": total, "face_frames": detected, "ratio": ratio})
-    return pub, visual
-
-import logging, traceback
-logging.basicConfig(level=logging.INFO) 
-
-# ─────────  TAREA CELERY ÚNICA ─────────
 @celery_app.task(
     soft_time_limit=CELERY_SOFT_LIMIT,
     time_limit=CELERY_HARD_LIMIT,
     bind=True,
-    name="celery_worker.process_session_video",
+    name="celery_worker.process_session_transcript",
 )
-def process_session_video(self, d: dict):
-    logging.info("🟢 START %s payload=%s", self.request.id, d)
+def process_session_transcript(self, payload: dict):
+    """Procesa sesión analizando SOLO el transcript del usuario.
+    Espera keys:
+        session_id, video_object_key (para reproducir en admin),
+        duration (segundos, opcional)
+    """
+    logging.info("🟢 START %s payload=%s", self.request.id, payload)
 
+    sid   = payload.get("session_id")
+    vkey  = payload.get("video_object_key")  # se guarda pero no se analiza
+    dur   = int(payload.get("duration", 0))
+    ts_iso = datetime.utcnow().isoformat()
+
+    if not vkey:
+        _update_db(sid, "⚠️ Falta video_object_key — no se procesó", vkey=vkey)
+        logging.warning("🚫 session %s: video_object_key missing", sid)
+        return
+
+    # 1· Descarga el .webm para extraer audio
+    webm = os.path.join(TMP_DIR, os.path.basename(vkey))
+    if not dl_s3(AWS_S3_BUCKET_NAME, vkey, webm):
+        _update_db(sid, "⚠️ Video no encontrado en S3", vkey=vkey)
+        return
+
+    # 2· Extrae audio (wav mono 16 kHz)
+    wav = webm.rsplit(".", 1)[0] + ".wav"
+    if not run_ffmpeg(["ffmpeg", "-i", webm, "-vn", "-ar", "16000", "-ac", "1", "-y", wav]):
+        _update_db(sid, "⚠️ No se pudo extraer audio", vkey=vkey)
+        return
+
+    # 3· Sube audio y lanza AWS Transcribe
+    audio_url = up_s3(wav, AWS_S3_BUCKET_NAME, f"audio/{os.path.basename(wav)}")
+    user_txt = ""
+    if audio_url:
+        job = f"leo-{secrets.token_hex(6)}"
+        transcribe.start_transcription_job(
+            TranscriptionJobName=job,
+            Media={"MediaFileUri": audio_url},
+            MediaFormat="wav",
+            LanguageCode="es-US",
+        )
+        for _ in range(60):
+            status = transcribe.get_transcription_job(TranscriptionJobName=job)["TranscriptionJob"]
+            if status["TranscriptionJobStatus"] in {"COMPLETED", "FAILED"}:
+                break
+            time.sleep(8)
+        if status["TranscriptionJobStatus"] == "COMPLETED":
+            uri = status["Transcript"]["TranscriptFileUri"]
+            user_txt = requests.get(uri).json()["results"]["transcripts"][0]["transcript"]
+
+    # 4· Recorta para cumplir limits de tokens
+    MAX_CHARS = 24_000
+    user_txt = user_txt[-MAX_CHARS:]
+
+    # 5· Llama a evaluador (sin avatar, sin video)
     try:
-        sid   = d.get("session_id")
-        vkey  = d.get("video_object_key")
-        dur   = int(d.get("duration", 0))
-        ts_iso = datetime.utcnow().isoformat()
-
-        # ─── 0. Validaciones rápidas ───
-        if not vkey:
-            _update_db(sid, "⚠️ Tarea sin video_object_key")
-            logging.warning("🚫 session %s: video_object_key missing", sid)
-            return
-
-        # 1· Descarga WEBM
-        webm = os.path.join(TMP_DIR, vkey)
-        if not dl_s3(AWS_S3_BUCKET_NAME, vkey, webm):
-            _update_db(sid, "⚠️ Video no encontrado en S3")
-            return
-
-        # 2· Convierte a MP4
-        mp4 = webm.replace(".webm", ".mp4")
-        ffmpeg(
-            ["ffmpeg", "-i", webm,
-             "-c:v", "libx264", "-preset", "fast",
-             "-c:a", "aac", "-y", mp4]
-        )
-
-        # 3· Analiza postura / cara
-        posture_pub, posture_json = analyze_video_posture(mp4)
-
-        # 4· Extrae audio y transcribe
-        wav = webm.replace(".webm", ".wav")
-        ffmpeg(["ffmpeg", "-i", mp4, "-vn",
-                "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", "-y", wav])
-
-        audio_url = up_s3(wav, AWS_S3_BUCKET_NAME, f"audio/{os.path.basename(wav)}")
-        user_txt = ""
-        if audio_url:
-            job = f"leo-{secrets.token_hex(6)}"
-            transcribe.start_transcription_job(
-                TranscriptionJobName=job,
-                Media={"MediaFileUri": audio_url},
-                MediaFormat="wav",
-                LanguageCode="es-US",
-            )
-            for _ in range(60):
-                st = transcribe.get_transcription_job(
-                    TranscriptionJobName=job
-                )["TranscriptionJob"]["TranscriptionJobStatus"]
-                if st in {"COMPLETED", "FAILED"}:
-                    break
-                time.sleep(10)
-            if st == "COMPLETED":
-                uri = transcribe.get_transcription_job(
-                    TranscriptionJobName=job
-                )["TranscriptionJob"]["Transcript"]["TranscriptFileUri"]
-                user_txt = requests.get(uri).json()["results"]["transcripts"][0]["transcript"]
-
-        # ── Recorte por tamaño ──
-        MAX_CHARS = 24_000
-        user_txt = user_txt[-MAX_CHARS:]
-
-        # 5· Evaluación con OpenAI
-        try:
-            res = evaluate_interaction(user_txt, "", mp4)
-            pub_eval = res.get("public",  "Evaluación no disponible.")
-            rh_eval  = res.get("internal", {})
-        except Exception as e:
-            pub_eval, rh_eval = "⚠️ Evaluación automática no disponible.", {"error": str(e)}
-
-        # 6· Guarda en BD
-        _update_db(
-            sid, pub_eval, rh_eval, dur, vkey, ts_iso,
-            tip=posture_pub, visual_json=posture_json,
-        )
-
+        res = evaluate_interaction(user_txt, "", None)
+        pub_eval = res.get("public",  "Evaluación no disponible.")
+        rh_eval  = res.get("internal", {})
     except Exception as e:
-        logging.error("❌ ERROR task %s – %s\n%s",
-                      self.request.id, e, traceback.format_exc())
-        raise
-    finally:
-        # Limpieza de ficheros temporales
-        for f in (locals().get("webm"), locals().get("mp4"), locals().get("wav")):
-            try:
-                if f and os.path.exists(f):
-                    os.remove(f)
-            except FileNotFoundError:
-                pass
-        logging.info("✅ DONE  task %s", self.request.id)
+        logging.exception("[EVALUATE] %s", e)
+        pub_eval, rh_eval = "⚠️ Evaluación automática no disponible.", {"error": str(e)}
+
+    # 6· Guarda en BD
+    _update_db(sid, pub_eval, rh_eval, dur, vkey, ts_iso)
+
+    # 7· Limpieza temp
+    for f in (webm, wav):
+        try:
+            if os.path.exists(f):
+                os.remove(f)
+        except FileNotFoundError:
+            pass
+    logging.info("✅ DONE  task %s", self.request.id)
+
+
+# ───────── BD Update ─────────
 
 def _update_db(
     sid: int,
@@ -237,25 +196,25 @@ def _update_db(
     dur: int = 0,
     vkey: str | None = None,
     ts: str | None = None,
-    tip: str | None = None,
-    visual_json: str | None = None,
 ):
-    conn = db()
+    conn = db_conn()
     cur = conn.cursor()
     cur.execute(
         """UPDATE interactions SET
-               evaluation=%s, evaluation_rh=%s, duration_seconds=%s,
-               audio_path=%s, timestamp=%s, tip=%s, visual_feedback=%s,
+               evaluation=%s, evaluation_rh=%s,
+               duration_seconds=%s, audio_path=%s, timestamp=%s,
                visible_to_user=FALSE
                WHERE id=%s;""",
-        (pub, json.dumps(rh or {}), dur, vkey, ts, tip, visual_json, sid),
+        (pub, json.dumps(rh or {}), dur, vkey, ts, sid),
     )
     conn.commit()
     conn.close()
 
-# ───────── INIT DB: corrige coma perdida ─────────
+
+# ───────── INIT DB (sigue igual) ─────────
+
 def init_db():
-    conn = db()
+    conn = db_conn()
     cur = conn.cursor()
     cur.execute(
         """CREATE TABLE IF NOT EXISTS interactions (
@@ -279,5 +238,4 @@ def init_db():
     conn.commit()
     conn.close()
 
-# Ejecuta init_db al arrancar worker
 init_db()

@@ -1003,21 +1003,19 @@ def log_full_session():
         
 
         # ───────── LANZA LA TAREA CELERY ─────────
-        from celery_worker import process_session_video 
+        from celery_worker import process_session_transcript
         
+      # ─── 2. construye el payload ───
         task_data = {
-            "session_id":       session_id,
-            "name":             name,
-            "email":            email,
-            "scenario":         scenario,
-            "duration":         duration,
-            "video_object_key": video_key,      # la key en S3
-            "user_transcript":  user_json,
-            "avatar_transcript": avatar_json
-        }   
-        app.logger.info("🗂  Sesión %s guardada → ENCOLANDO", session_id)
+            "session_id":      session_id,
+            "duration":        duration,          # opcional, para métricas
+            "user_transcript": user_json          # ⬅️  solo el texto del usuario
+            # (si quisieras seguir guardando la key del video –p. ej. para reproducirlo
+            # en el panel RH– ponla en la BD como ya haces, pero NO hace falta enviarla)
+        }
 
-        result = process_session_video.delay(task_data)
+        # ─── 3. lanza la tarea ───
+        result = process_session_transcript.delay(task_data)
 
         app.logger.info("🚀  Sesión %s ENCOLADA (task_id=%s)", session_id, result.id)
         # ─────────────────────────────────────────
