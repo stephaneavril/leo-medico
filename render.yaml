@@ -44,17 +44,16 @@ services:
     region: oregon
     branch: main
     dockerfilePath: ./Dockerfile
-    plan: pro-plus
-    autoscale:          # opcional: comenta o ajusta
-      minInstances: 1
+    plan: pro
+    autoscale:
+      minInstances: 1   # mantiene 1 vivo
       maxInstances: 1
-    entrypoint: ""
     command: >
       celery -A celery_worker:celery_app worker
-      --loglevel=info
-      --pool=prefork --autoscale=8,2
-      --soft-time-limit 1200 --time-limit 1260
-      --heartbeat-interval 30
+             --loglevel=info
+             --pool=prefork --autoscale=8,2
+             --soft-time-limit 1200 --time-limit 1260
+             --heartbeat-interval 30
     envVars:                         # las mismas que ya tenías
       - key: DATABASE_URL
         sync: false
