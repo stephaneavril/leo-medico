@@ -51,8 +51,10 @@ services:
     entrypoint: ""
     command: >
       celery -A celery_worker:celery_app worker
-             --loglevel=info
-             --concurrency=4      # <= clave
+      --loglevel=info
+      --pool=prefork --autoscale=8,2
+      --soft-time-limit 1200 --time-limit 1260
+      --heartbeat-interval 30
     envVars:                         # las mismas que ya tenías
       - key: DATABASE_URL
         sync: false
