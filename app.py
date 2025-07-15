@@ -1003,7 +1003,7 @@ def log_full_session():
         
 
         # ───────── LANZA LA TAREA CELERY ─────────
-        from celery_worker_legacy import process_session_transcript   # o el nombre real
+        from celery_worker import process_session_transcript   # o el nombre real
         
       # ─── 2. construye el payload ───
         task_data = {

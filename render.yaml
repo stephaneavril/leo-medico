@@ -50,7 +50,7 @@ services:
       minInstances: 1
       maxInstances: 1
     command: >
-      celery -A celery_worker_legacy:celery_app worker --loglevel=info \
+      celery -A celery_worker:celery_app worker --loglevel=info \
       --pool=prefork --autoscale=8,2 \
       --soft-time-limit 1200 --heartbeat-interval 20 \
       --without-gossip --without-mingle

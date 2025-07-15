@@ -109,7 +109,7 @@ def db_conn():
     soft_time_limit=CELERY_SOFT_LIMIT,
     time_limit=CELERY_HARD_LIMIT,
     bind=True,
-    name="celery_worker_legacy.process_session_transcript",
+    name="celery_worker.process_session_transcript",
 )
 def process_session_transcript(self, payload: dict):
     """Procesa sesión analizando SOLO el transcript del usuario.
