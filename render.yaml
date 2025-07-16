@@ -51,7 +51,7 @@ services:
     # Prefork real (no “solo”), 4 procesos
     command: >
       celery -A celery_worker:celery_app worker
-      --pool=prefork --concurrency=4
+      --pool=prefork --concurrency=8
       --loglevel=info --hostname=worker1@%h
       --heartbeat-interval=30
       --soft-time-limit=900 --time-limit=960
