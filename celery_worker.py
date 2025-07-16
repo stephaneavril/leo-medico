@@ -26,7 +26,14 @@ CELERY_SOFT_LIMIT = int(os.getenv("CELERY_SOFT_LIMIT", 600))   # 10 min avisa
 CELERY_HARD_LIMIT = int(os.getenv("CELERY_HARD_LIMIT", 660))   # 11 min mata
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-celery_app = Celery("leo_tasks", broker=REDIS_URL, backend=REDIS_URL)
+celery_app = Celery(
+    "leo_tasks",
+    broker=os.environ["REDIS_URL"],
+    backend=os.environ["REDIS_URL"],
+)
+celery_app.conf.broker_transport_options = {
+    "visibility_timeout": 7200
+}
 celery_app.conf.update(
     task_track_started=True,
     task_acks_late=True,
@@ -147,7 +154,7 @@ def process_session_transcript(self, payload: dict):
     audio_url = up_s3(wav, AWS_S3_BUCKET_NAME, f"audio/{os.path.basename(wav)}")
     user_txt = ""
     if audio_url:
-        job = f"leo-{secrets.token_hex(6)}"
+        job = f"leo-{sid}-{secrets.token_hex(4)}""
         transcribe.start_transcription_job(
             TranscriptionJobName=job,
             Media={"MediaFileUri": audio_url},

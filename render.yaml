@@ -48,13 +48,16 @@ services:
     autoscale:
       minInstances: 1   # mantiene 1 vivo
       maxInstances: 1
+    # Prefork real (no “solo”), 4 procesos
     command: >
       celery -A celery_worker:celery_app worker
-             --loglevel=info
-             --pool=prefork --autoscale=8,2
-             --soft-time-limit 1200 --time-limit 1260
-             --heartbeat-interval 30
-    envVars:                         # las mismas que ya tenías
+      --pool=prefork --concurrency=4
+      --loglevel=info --hostname=worker1@%h
+      --heartbeat-interval=30
+      --soft-time-limit=900 --time-limit=960
+    envVars:
+      - key: C_FORCE_ROOT
+        value: "true"
       - key: DATABASE_URL
         sync: false
       - key: OPENAI_API_KEY
