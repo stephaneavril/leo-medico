@@ -55,6 +55,8 @@ services:
       --loglevel=info --hostname=worker1@%h
       --heartbeat-interval=30
       --soft-time-limit=900 --time-limit=960
+    autoDeploy: true
+    autoRestart: always
     envVars:
       - key: C_FORCE_ROOT
         value: "true"
