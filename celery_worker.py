@@ -154,7 +154,7 @@ def process_session_transcript(self, payload: dict):
     audio_url = up_s3(wav, AWS_S3_BUCKET_NAME, f"audio/{os.path.basename(wav)}")
     user_txt = ""
     if audio_url:
-        job = f"leo-{sid}-{secrets.token_hex(4)}""
+        job = f"leo-{sid}-{secrets.token_hex(4)}"
         transcribe.start_transcription_job(
             TranscriptionJobName=job,
             Media={"MediaFileUri": audio_url},
