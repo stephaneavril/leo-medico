@@ -8,7 +8,7 @@ RUN apt-get update \
 
 # 2) Variables de entorno útiles
 ENV PYTHONUNBUFFERED=1 \
-    C_FORCE_ROOT=true          # permite a Celery correr como root en Render
+    C_FORCE_ROOT=true          
 
 # 3) Dependencias Python
 WORKDIR /app
