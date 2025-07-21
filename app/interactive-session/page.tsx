@@ -31,7 +31,7 @@ const DEFAULT_CONFIG: StartAvatarRequest = {
   quality: AvatarQuality.Low,
   avatarName: 'Ann_Doctor_Standing2_public',
   knowledgeId: '13f254b102cf436d8c07b9fb617dbadf',
-  language: 'es-MX',
+  language: 'es',
   voice: {
     rate: 1.5,
     emotion: VoiceEmotion.EXCITED,
