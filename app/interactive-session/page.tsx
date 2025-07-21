@@ -36,7 +36,7 @@ const DEFAULT_CONFIG: StartAvatarRequest = {
     voiceId: 'sofia_es_mx_female',      // ← ID exacto devuelto por /v2/voices
     model: ElevenLabsModel.eleven_multilingual_v2,
     rate: 1.2,                          // velocidad natural
-    emotion: VoiceEmotion.NEUTRAL
+    emotion: VoiceEmotion.EXCITED
   },
   voiceChatTransport: VoiceChatTransport.WEBSOCKET,
   sttSettings: { provider: STTProvider.DEEPGRAM },
