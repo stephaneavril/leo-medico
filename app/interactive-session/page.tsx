@@ -33,15 +33,13 @@ const DEFAULT_CONFIG: StartAvatarRequest = {
   knowledgeId: '13f254b102cf436d8c07b9fb617dbadf',
   language: 'es-MX',
   voice: {
-    voiceId: 'sofia_es_mx_female',      // ← ID exacto devuelto por /v2/voices
-    model: ElevenLabsModel.eleven_multilingual_v2,
-    rate: 1.2,                          // velocidad natural
-    emotion: VoiceEmotion.EXCITED
+    rate: 1.5,
+    emotion: VoiceEmotion.EXCITED,
+    model: ElevenLabsModel.eleven_flash_v2_5,
   },
   voiceChatTransport: VoiceChatTransport.WEBSOCKET,
   sttSettings: { provider: STTProvider.DEEPGRAM },
 };
-
 
 function InteractiveSessionContent() {
   const router = useRouter();
