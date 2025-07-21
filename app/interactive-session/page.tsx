@@ -30,12 +30,12 @@ import { MessageHistory } from '@/components/AvatarSession/MessageHistory';
 const DEFAULT_CONFIG: StartAvatarRequest = {
   quality: AvatarQuality.Low,
   avatarName: 'Ann_Doctor_Standing2_public',
-  knowledgeId: '13f254b102cf436d8c07b9fb617dbadf',
-  language: 'es',
+  language:  'es',                        // o 'es-MX' si la voz declara ese código
   voice: {
-    rate: 1.5,
-    emotion: VoiceEmotion.EXCITED,
-    model: ElevenLabsModel.eleven_flash_v2_5,
+    voiceId: '8124d9bfe389414f8f660d82fb9ddde8',
+    model:   ElevenLabsModel.eleven_multilingual_v2,
+    rate:    1.15,
+    emotion: VoiceEmotion.FRIENDLY        // opcional
   },
   voiceChatTransport: VoiceChatTransport.WEBSOCKET,
   sttSettings: { provider: STTProvider.DEEPGRAM },
