@@ -353,23 +353,22 @@
         </div>
 
         <!-- Análisis RH -->
-        {% if row[9].overall_rh_summary %}
-        <div class="evaluation rh">
-          <strong>Análisis para RH:</strong>
-          <p><strong>Resumen General RH:</strong> {{ row[9].overall_rh_summary }}</p>
+{% if row[9].overall_rh_summary %}
+  <div class="evaluation rh">
+    <strong>Análisis para RH:</strong>
+    <p><strong>Resumen General RH:</strong> {{ row[9].overall_rh_summary }}</p>
 
-          {% set fb = row[9].gpt_detailed_feedback %}
-          <h4>🎯 Aplicación del Modelo de Ventas (Da Vinci)</h4>
-          <div class="metric-line"><span>Preparación:</span>
-       <span>{{ fb.preparacion if fb else 'N/A' }}</span></div>
-<div class="metric-line"><span>Apertura:</span>
-       <span>{{ fb.apertura if fb else 'N/A' }}</span></div>
-<div class="metric-line"><span>Persuasión:</span>
-       <span>{{ fb.persuasion if fb else 'N/A' }}</span></div>
-<div class="metric-line"><span>Cierre:</span>
-       <span>{{ fb.cierre if fb else 'N/A' }}</span></div>
-<div class="metric-line"><span>Análisis Post:</span>
-       <span>{{ fb.analisis_post if fb else 'N/A' }}</span></div>
+    {# --- ALIAS A LOS FEEDBACKS DE GPT --- #}
+    {% set fb = row[9].gpt_detailed_feedback %}
+    {% set md = fb.Modelo_DaVinci if fb and fb.Modelo_DaVinci is defined
+              else (fb.modelo_davinci if fb and fb.modelo_davinci is defined else None) %}
+
+    <h4>🎯 Aplicación del Modelo de Ventas (Da Vinci)</h4>
+    <div class="metric-line"><span>Preparación:</span><span>{{ md.preparacion if md else 'N/A' }}</span></div>
+    <div class="metric-line"><span>Apertura:</span><span>{{ md.apertura if md else 'N/A' }}</span></div>
+    <div class="metric-line"><span>Persuasión:</span><span>{{ md.persuasion if md else 'N/A' }}</span></div>
+    <div class="metric-line"><span>Cierre:</span><span>{{ md.cierre if md else 'N/A' }}</span></div>
+    <div class="metric-line"><span>Análisis Post:</span><span>{{ md.analisis_post if md else 'N/A' }}</span></div>
 
 
           <h4 style="margin-top: 15px">🧠 Conocimientos y Habilidades</h4>
