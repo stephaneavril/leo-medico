@@ -360,21 +360,17 @@
 
           {% set fb = row[9].gpt_detailed_feedback %}
           <h4>🎯 Aplicación del Modelo de Ventas (Da Vinci)</h4>
-          <div class="metric-line">
-            <span>Diagnóstico:</span
-            ><span>{{ fb.diagnostico if fb else 'N/A' }}</span>
-          </div>
-          <div class="metric-line">
-            <span>Argumentación:</span
-            ><span>{{ fb.argumentacion if fb else 'N/A' }}</span>
-          </div>
-          <div class="metric-line">
-            <span>Validación:</span
-            ><span>{{ fb.validacion if fb else 'N/A' }}</span>
-          </div>
-          <div class="metric-line">
-            <span>Cierre:</span><span>{{ fb.cierre if fb else 'N/A' }}</span>
-          </div>
+          <div class="metric-line"><span>Preparación:</span>
+       <span>{{ fb.preparacion if fb else 'N/A' }}</span></div>
+<div class="metric-line"><span>Apertura:</span>
+       <span>{{ fb.apertura if fb else 'N/A' }}</span></div>
+<div class="metric-line"><span>Persuasión:</span>
+       <span>{{ fb.persuasion if fb else 'N/A' }}</span></div>
+<div class="metric-line"><span>Cierre:</span>
+       <span>{{ fb.cierre if fb else 'N/A' }}</span></div>
+<div class="metric-line"><span>Análisis Post:</span>
+       <span>{{ fb.analisis_post if fb else 'N/A' }}</span></div>
+
 
           <h4 style="margin-top: 15px">🧠 Conocimientos y Habilidades</h4>
           <div class="metric-line">

@@ -4,15 +4,14 @@
 # Devuelve:
 #   { "public": str, "internal": dict, "level": "alto" | "error" }
 # -------------------------------------------------------------------
-import os, json, textwrap
-from datetime import datetime
-from typing import Optional
+import os, json, textwrap, unicodedata
+from typing import Optional, Dict, List
 
 # ── OpenCV opcional ────────────────────────────────────────────────
 try:
-    import cv2                          # pip install opencv-python-headless
+    import cv2  # pip install opencv-python-headless
 except ImportError:
-    cv2 = None                          # ← evita crash en entornos sin OpenCV
+    cv2 = None  # ← evita crash en entornos sin OpenCV
 
 from openai import OpenAI, OpenAIError
 from dotenv import load_dotenv
@@ -20,15 +19,23 @@ from dotenv import load_dotenv
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY", ""))
 
+# ────────────────────────────────────────────────────────────────────
+#  Utilidades comunes
+# ────────────────────────────────────────────────────────────────────
+
+def normalize(txt: str) -> str:
+    """Minúsculas + sin acentos para comparaciones robustas."""
+    return unicodedata.normalize("NFD", txt).encode("ascii", "ignore").decode().lower()
 
 # ────────────────────────────────────────────────────────────────────
 #  Función principal
 # ────────────────────────────────────────────────────────────────────
+
 def evaluate_interaction(
     user_text: str,
     leo_text: str,
     video_path: Optional[str] = None,
-) -> dict:
+) -> Dict[str, object]:
     """
     user_text : diálogo del participante (representante)
     leo_text  : diálogo del avatar / médico (puede ir vacío)
@@ -42,13 +49,12 @@ def evaluate_interaction(
 
     # ── Heurísticas rápidas ─────────────────────────────────────────
     KW_LIST = [
-        "beneficio", "estudio", "síntoma", "tratamiento",
+        "beneficio", "estudio", "sintoma", "tratamiento",
         "reflujo", "mecanismo", "eficacia", "seguridad",
     ]
-    CLOSURE_WORDS = ["compromiso", "siguiente paso", "acordamos", "puedo contar con"]
     BAD_PHRASES = [
-        "no sé", "no tengo idea", "lo invento", "no lo estudié",
-        "no estudié bien", "no conozco", "no me acuerdo",
+        "no se", "no tengo idea", "lo invento", "no lo estudie",
+        "no estudie bien", "no conozco", "no me acuerdo",
     ]
     LISTEN_KW = [
         "entiendo", "comprendo", "veo que", "lo que dices",
@@ -56,13 +62,12 @@ def evaluate_interaction(
     ]
 
     def kw_score(t: str) -> int:
-        return sum(kw in t.lower() for kw in KW_LIST)
-
-    def has_closure(t: str) -> bool:
-        return any(w in t.lower() for w in CLOSURE_WORDS)
+        nt = normalize(t)
+        return sum(kw in nt for kw in KW_LIST)
 
     def disq_flag(t: str) -> bool:
-        return any(w in t.lower() for w in BAD_PHRASES)
+        nt = normalize(t)
+        return any(w in nt for w in BAD_PHRASES)
 
     # ── Análisis visual express (solo si hay OpenCV) ────────────────
     def visual_analysis(path: str):
@@ -107,13 +112,34 @@ def evaluate_interaction(
         else ("⚠️ Sin video disponible.", "No evaluado", "N/A")
     )
 
-    # ── Detección simple de pasos de venta ──────────────────────────
-    sales_model = {
-        "diagnostico":   any(w in user_text.lower() for w in ["cómo", "qué", "cuándo", "por qué", "necesita"]),
-        "argumentacion": any(w in user_text.lower() for w in ["beneficio", "eficaz", "estudio", "seguridad"]),
-        "validacion":    any(w in user_text.lower() for w in ["entiendo", "comprendo", "veo que"]),
-        "cierre":        has_closure(user_text),
+    # --- Detección Modelo Da Vinci (5 pasos) -----------------------
+    PHRASE_MAP: Dict[str, List[str]] = {
+        "preparacion": [
+            "objetivo de la visita", "materiales", "mensaje clave", "smart",
+            "matriz de target", "escalon",
+        ],
+        "apertura": [
+            "buenos dias", "como ha estado", "pacientes", "necesidades",
+            "visita anterior",
+        ],
+        "persuasion": [
+            "objetivos de tratamiento", "beneficio", "mecanismo",
+            "estudio", "evidencia", "caracteristicas del producto",
+        ],
+        "cierre": [
+            "siguiente paso", "podemos acordar", "cuento con usted",
+            "promocion", "farmacias",
+        ],
+        "analisis_post": [
+            "auto-evaluacion", "objecciones", "proxima visita", "actualiza",
+        ],
     }
+
+    def step_flag(step_kw: List[str]) -> bool:
+        nt = normalize(user_text)
+        return any(p in nt for p in step_kw)
+
+    sales_model = {step: step_flag(kws) for step, kws in PHRASE_MAP.items()}
 
     # ────────────────────────────────────────────────────────────────
     #  Llamada a GPT
@@ -121,11 +147,9 @@ def evaluate_interaction(
     try:
         SYSTEM_PROMPT = textwrap.dedent("""
         Eres un coach-evaluador senior de la industria farmacéutica.
-        Evalúa solo al Participante (representante) y responde EXCLUSIVAMENTE
-        con un bloque JSON que cumpla el formato indicado.
-
-        Si detectas información clínica falsa o improvisada → todas
-        las fases se marcan "Necesita Mejora".
+        Debes calificar **cada fase del Modelo Da Vinci** según la evidencia
+        en la conversación (Preparación, Apertura, Persuasión, Cierre,
+        Análisis Posterior). Usa solo los datos dados y responde en JSON.
         """)
 
         FORMAT_GUIDE = textwrap.dedent("""
@@ -133,15 +157,13 @@ def evaluate_interaction(
           "public_summary": "<máx 120 palabras>",
           "internal_analysis": {
             "overall_evaluation": "<2-3 frases>",
-            "Modelo_DaVinci": { ... },
-            "Prioridad_tiempo": "...",
-            "Adaptacion_estilo": { ... },
-            "Control_conversacion": "...",
-            "Manejo_preguntas": "...",
-            "Active_Listening": "...",
-            "Visual_presence": "...",
-            "Safety_flags": { ... },
-            "Areas_de_mejora": [ ... ]
+            "Modelo_DaVinci": {
+              "preparacion": "Excelente | Bien | Necesita Mejora",
+              "apertura": "Excelente | Bien | Necesita Mejora",
+              "persuasion": "Excelente | Bien | Necesita Mejora",
+              "cierre": "Excelente | Bien | Necesita Mejora",
+              "analisis_post": "Excelente | Bien | Necesita Mejora"
+            }
           }
         }
         """)
@@ -157,28 +179,26 @@ def evaluate_interaction(
             response_format={"type": "json_object"},
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT + FORMAT_GUIDE},
-                {"role": "user",   "content": convo},
+                {"role": "user", "content": convo},
             ],
             temperature=0.4,
         )
         gpt_json = json.loads(completion.choices[0].message.content)
 
-        gpt_public   = gpt_json.get("public_summary", "")
+        gpt_public = gpt_json.get("public_summary", "")
         gpt_internal = gpt_json.get("internal_analysis", {})
-        level        = "alto"
-
+        level = "alto"
     except (OpenAIError, json.JSONDecodeError, Exception) as e:
-        gpt_public   = f"⚠️ GPT error: {e}"
+        gpt_public = f"⚠️ GPT error: {e}"
         gpt_internal = {"error": str(e)}
-        level        = "error"
+        level = "error"
 
     # ────────────────────────────────────────────────────────────────
     #  Build internal summary for RH
     # ────────────────────────────────────────────────────────────────
-    def norm_keys(d: dict) -> dict:
-        import unicodedata
+    def norm_keys(d: Dict[str, object]) -> Dict[str, object]:
         return {
-            unicodedata.normalize("NFD", k).encode("ascii", "ignore").decode().lower(): v
+            normalize(k): v
             for k, v in d.items()
         }
 
@@ -187,13 +207,13 @@ def evaluate_interaction(
         "knowledge_score": f"{kw_score(user_text)}/8",
         "visual_presence": vis_int,
         "visual_percentage": vis_pct,
-        "sales_model_simple_detection": {
+        "da_vinci_step_flags": {
             **{k: ("✅" if v else "❌") for k, v in sales_model.items()},
-            "steps_applied_count": f"{sum(sales_model.values())}/4",
+            "steps_applied_count": f"{sum(sales_model.values())}/5",
         },
         "active_listening_simple_detection": (
-            "Alta" if sum(p in user_text.lower() for p in LISTEN_KW) >= 4
-            else "Moderada" if sum(p in user_text.lower() for p in LISTEN_KW) >= 2
+            "Alta" if sum(p in normalize(user_text) for p in LISTEN_KW) >= 4
+            else "Moderada" if sum(p in normalize(user_text) for p in LISTEN_KW) >= 2
             else "Baja"
         ),
         "disqualifying_phrases_detected": disq_flag(user_text),
