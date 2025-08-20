@@ -43,11 +43,102 @@ def evaluate_interaction(
                 se omite el análisis visual.
     Devuelve un dict con:
         - public  : bloque de texto para mostrar al usuario
-        - internal: JSON detallado para RH
+        - internal: JSON detallado para Capacitación/Training
         - level   : "alto" | "error"
     """
 
     # ── Heurísticas rápidas ─────────────────────────────────────────
+    # Configuración de scoring ponderado específico (editable por Training)
+    WEIGHTED_KWS = {
+        # 3 puntos (claims fuertes / diferenciales clínicos)
+        "3pt": [
+            "esoxx-one mejora hasta 90% todos los sintomas de la erge",
+            "reduccion del uso de antiacidos",
+            "demostrado en niños y adolescentes",
+            "esoxx-one reduce hasta 90% la frecuencia y severidad de los sintomas de erge",
+            "esoxx-one demostro mejoria significativa de los sintomas esofagicos y extraesofagicos de la erge",
+            "esoxx-one mas ibp es significativamente mas eficaz que la monoterapia con ibp para la epitelizacion esofagica",
+            "reduce significativamente los sintomas de la erge vs monoterapia ibps",
+            "alivio en menor tiempo (2 semanas vs 4 semanas)",
+            "reduce la falla al tratamiento",
+        ],
+        # 2 puntos (propiedades/mejores prácticas de uso y posología)
+        "2pt": [
+            "protege y repara mucosa esofagica",
+            "protege y promueve la reparacion de la mucosa esofagica",
+            "barrera bioadhesiva",
+            "combinacion de 3 activos",
+            "acido hialuronico",
+            "accion reparadora",
+            "sulfato de condroitina",
+            "accion protectora",
+            "poloxamero 407",
+            "agente bioadhesivo",
+            "liquido a temperatura ambiente y en estado gel a temperatura corporal",
+            "recubre el epitelio esofagico",
+            "portador bioadhesivo de los componentes",
+            "un sobre despues de cada comida y antes de dormir",
+            "esperar por lo menos 30min despues sin tomar alimentos o bebidas",
+            "esperar 60min",
+            "esperar 1hr",
+        ],
+        # 1 punto (mensajes base / valor universal)
+        "1pt": [
+            "unico",
+            "mecanismo de proteccion original e innovador para el manejo de la erge",
+            "alivia los sintomas del erge",
+            "esoxx-one",
+            "forma un complejo macromolecular que recubre la mucosa esofagica",
+            "actua como barrera mecanica contra componentes nocivos del reflujo",
+            "mejora la calidad de vida de los pacientes",
+        ],
+    }
+
+    # Frases guía para puntuar dentro de fases del Modelo Da Vinci
+    DAVINCI_POINTS = {
+        "apertura": {
+            2: [
+                "cuales son las mayores preocupaciones que tiene en sus pacientes con erge",
+                "que caracteristicas tienen sus pacientes con reflujo gastroesofagico",
+                "dando seguimiento a mi visita anterior",
+            ],
+            1: [
+                "buenos dias dra",
+                "mi nombre es",
+            ],
+        },
+        "persuasion": {
+            2: [
+                "que caracteristicas considera ideales en un producto para tratar la erge",
+                "que es lo que busca cuando selecciona un producto",
+                "cuales son los objetivos de tratamiento para tratar un paciente con reflujo gastroesofagico",
+            ]
+        },
+        "cierre": {
+            2: [
+                "con base a lo dialogado considera que esoxx-one pueden ser la mejor opcion de tratamiento para sus pacientes con erge",
+                "que otras caracteristicas necesita para considerar a esoxx-one como primera opcion",
+                "grupo de pacientes",
+                "beneficie a sus pacientes",
+            ],
+            1: [
+                "puedo contar con",
+                "recetas",  # p. ej., "¿Puedo contar con X pacientes o recetas?"
+            ],
+        },
+        # Preparación: detector + recomendación SMART
+        "preparacion": {
+            2: [
+                # cuando la doctora pregunta objetivo y el rep formula objetivo SMART
+                "objetivo smart",
+            ],
+            1: [
+                "objetivo de la visita",
+                "mensaje clave",
+            ]
+        }
+    }
+
     KW_LIST = [
         "beneficio", "estudio", "sintoma", "tratamiento",
         "reflujo", "mecanismo", "eficacia", "seguridad",
@@ -60,6 +151,31 @@ def evaluate_interaction(
         "entiendo", "comprendo", "veo que", "lo que dices",
         "si entiendo bien", "parafraseando",
     ]
+
+    def score_weighted_phrases(t: str) -> Dict[str, object]:
+        nt = normalize(t)
+        breakdown = []
+        total = 0
+        for pts_key, phrases in WEIGHTED_KWS.items():
+            pts = int(pts_key.replace("pt", "").replace("s", ""))
+            for p in phrases:
+                if p in nt:
+                    total += pts
+                    breakdown.append({"phrase": p, "points": pts})
+        return {"total_points": total, "breakdown": breakdown}
+
+    def score_davinci_points(t: str) -> Dict[str, object]:
+        nt = normalize(t)
+        stage_points: Dict[str, int] = {}
+        for stage, rules in DAVINCI_POINTS.items():
+            s = 0
+            for pts, plist in rules.items():
+                for p in plist:
+                    if p in nt:
+                        s += pts
+            stage_points[stage] = s
+        stage_points["total"] = sum(v for k, v in stage_points.items() if k != "total")
+        return stage_points
 
     def kw_score(t: str) -> int:
         nt = normalize(t)
@@ -131,7 +247,7 @@ def evaluate_interaction(
             "promocion", "farmacias",
         ],
         "analisis_post": [
-            "auto-evaluacion", "objecciones", "proxima visita", "actualiza",
+            "auto-evaluacion", "objeciones", "objecciones", "proxima visita", "actualiza",
         ],
     }
 
@@ -150,6 +266,8 @@ def evaluate_interaction(
         Debes calificar **cada fase del Modelo Da Vinci** según la evidencia
         en la conversación (Preparación, Apertura, Persuasión, Cierre,
         Análisis Posterior). Usa solo los datos dados y responde en JSON.
+        Si la doctora pregunta por el objetivo, evalúa si el objetivo del representante es SMART
+        (específico, medible, alcanzable, relevante, acotado en tiempo) y menciónalo en la evaluación general.
         """)
 
         FORMAT_GUIDE = textwrap.dedent("""
@@ -194,23 +312,33 @@ def evaluate_interaction(
         level = "error"
 
     # ────────────────────────────────────────────────────────────────
-    #  Build internal summary for RH
+    #  Build internal summary for Training (antes "RH")
     # ────────────────────────────────────────────────────────────────
     def norm_keys(d: Dict[str, object]) -> Dict[str, object]:
-        return {
-            normalize(k): v
-            for k, v in d.items()
-        }
+        return {normalize(k): v for k, v in d.items()}
+
+    weighted = score_weighted_phrases(user_text)
+    davinci_pts = score_davinci_points(user_text)
 
     internal_summary = {
-        "overall_rh_summary": gpt_internal.get("overall_evaluation", ""),
-        "knowledge_score": f"{kw_score(user_text)}/8",
+        # CAMBIO DE NOMBRE: de RH a Training/Capacitación
+        "overall_training_summary": gpt_internal.get("overall_evaluation", ""),
+        # Métrica original (conteo de 8 palabras)
+        "knowledge_score_legacy": f"{kw_score(user_text)}/8",
+        # Nueva métrica ponderada solicitada
+        "knowledge_weighted_total_points": weighted["total_points"],
+        "knowledge_weighted_breakdown": weighted["breakdown"],
+
         "visual_presence": vis_int,
         "visual_percentage": vis_pct,
+
         "da_vinci_step_flags": {
             **{k: ("✅" if v else "❌") for k, v in sales_model.items()},
             "steps_applied_count": f"{sum(sales_model.values())}/5",
         },
+        # Puntaje por fase (Apertura/Persuasión/Cierre/Preparación)
+        "da_vinci_points": davinci_pts,
+
         "active_listening_simple_detection": (
             "Alta" if sum(p in normalize(user_text) for p in LISTEN_KW) >= 4
             else "Moderada" if sum(p in normalize(user_text) for p in LISTEN_KW) >= 2
@@ -219,6 +347,13 @@ def evaluate_interaction(
         "disqualifying_phrases_detected": disq_flag(user_text),
         "gpt_detailed_feedback": norm_keys(gpt_internal),
     }
+
+    # Si no hubo tiempo para análisis posterior, sugerir follow-up operativo
+    if not sales_model.get("analisis_post", False):
+        internal_summary.setdefault("follow_up_suggestions", [])
+        internal_summary["follow_up_suggestions"].append(
+            "Registrar una autoevaluación breve (3 ítems: qué funcionó, objeción clave, plan para próxima visita) y programar recordatorio."
+        )
 
     public_block = textwrap.dedent(f"""
         {gpt_public}
