@@ -13,11 +13,11 @@ interface SessionRecord {
   user_transcript: string;
   avatar_transcript: string;
   coach_advice: string;
-  rh_evaluation?: string;              // ⬅️ nuevo
-  video_s3: string | null;
+  rh_evaluation?: string;          // Texto humano publicado por Capacitación
+  video_s3: string | null;         // Se mantiene en el tipo por compatibilidad
   created_at: string;
   tip: string;
-  visual_feedback: string;
+  visual_feedback: string;         // No se mostrará al usuario
   duration: number;
 }
 
@@ -29,7 +29,7 @@ interface DashboardData {
   used_seconds: number;
 }
 
-// Valores especiales que indican que el video no está listo
+// Valores especiales que indican que el video no está listo (compatibilidad)
 const SENTINELS = [
   'Video_Not_Available_Error',
   'Video_Processing_Failed',
@@ -53,8 +53,7 @@ export default function DashboardClient({
     return (
       <div className="min-h-screen flex flex-col items-center justify-center">
         <style jsx global>{`
-          html,
-          body {
+          html, body {
             margin: 0;
             padding: 0;
             background: #0c0e2c;
@@ -72,8 +71,7 @@ export default function DashboardClient({
     return (
       <div className="min-h-screen flex items-center justify-center">
         <style jsx global>{`
-          html,
-          body {
+          html, body {
             margin: 0;
             padding: 0;
             background: #0c0e2c;
@@ -100,11 +98,9 @@ export default function DashboardClient({
     video_s3: s.video_s3 && !SENTINELS.includes(s.video_s3) ? s.video_s3 : null,
     created_at: s.created_at ? new Date(s.created_at).toLocaleString() : '',
   }));
-  // ⬇️ Solo mostrar las sesiones que RH o IA ya publicaron
-const visibleRecords = records.filter(
-  (r) => r.coach_advice || r.rh_evaluation
-);
 
+  // Solo mostrar las sesiones que IA o Capacitación ya publicaron
+  const visibleRecords = records.filter((r) => r.coach_advice || r.rh_evaluation);
 
   // Utilidades
   const formatTime = (seconds: number) => {
@@ -124,12 +120,12 @@ const visibleRecords = records.filter(
       {/* =========== ESTILOS GLOBAL ============ */}
       <style jsx global>{`
         @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700&family=Open+Sans:wght@400;600&display=swap');
-html,
-  body,
-  .dashboard-page-container {
-    background: #f4f6fa !important;   /* gris claro corporativo   */
-    color: #222 !important;           /* texto oscuro legible    */
-  }
+
+        html, body, .dashboard-page-container {
+          background: #f4f6fa !important; /* gris claro corporativo */
+          color: #222 !important;         /* texto oscuro legible */
+        }
+
         :root {
           --primary-dark: #0c0e2c;
           --primary-mid: #003559;
@@ -141,8 +137,7 @@ html,
           --shadow-lg: rgba(0, 0, 0, 0.15);
         }
 
-        html,
-        body {
+        html, body {
           margin: 0;
           padding: 0;
           background: var(--bg-gray);
@@ -203,13 +198,8 @@ html,
           text-align: center;
           transition: transform 0.2s ease;
         }
-        .card:hover {
-          transform: translateY(-5px);
-        }
-        .card h3 {
-          margin: 10px 0;
-          color: var(--primary-dark);
-        }
+        .card:hover { transform: translateY(-5px); }
+        .card h3 { margin: 10px 0; color: var(--primary-dark); }
         .card button {
           padding: 10px 20px;
           border: none;
@@ -220,10 +210,7 @@ html,
           font-weight: 600;
           transition: background 0.2s ease, transform 0.1s ease;
         }
-        .card button:hover {
-          background: #009acd;
-          transform: translateY(-1px);
-        }
+        .card button:hover { background: #009acd; transform: translateY(-1px); }
 
         /* Progress bar */
         .progress-bar {
@@ -247,21 +234,14 @@ html,
           transition: width 0.4s ease-out;
         }
 
-        /* Session cards */
+        /* Session entries */
         .session-entry {
           background: var(--bg-white);
           border-radius: 16px;
           box-shadow: 0 8px 24px var(--shadow-lg);
           padding: 24px;
           margin-bottom: 40px;
-          display: grid;
-          grid-template-columns: 1fr;
-          gap: 24px;
-        }
-        @media (min-width: 1024px) {
-          .session-entry {
-            grid-template-columns: 1fr 380px;
-          }
+          display: block; /* una sola columna (se elimina la columna de video) */
         }
         .session-entry h3 {
           font: 600 20px 'Montserrat', sans-serif;
@@ -269,13 +249,6 @@ html,
           margin-bottom: 12px;
           border-bottom: 1px solid #eee;
           padding-bottom: 8px;
-        }
-        .session-entry video {
-          width: 100%;
-          border: 1px solid var(--primary-light);
-          border-radius: 12px;
-          object-fit: cover;
-          box-shadow: 0 4px 10px var(--shadow-lg);
         }
 
         .evaluation-box {
@@ -289,8 +262,7 @@ html,
           background: #ffeeee;
           border-left-color: var(--secondary-red);
         }
-        .evaluation-box.tip-box,
-        .evaluation-box.visual-feedback-box {
+        .evaluation-box.tip-box {
           background: #f9fbff;
           border-left-color: var(--primary-light);
         }
@@ -307,18 +279,20 @@ html,
         <div className="container-content">
           {/* ---------- Selección de escenario ---------- */}
           <h2 className="section-title">Selecciona tu entrenamiento</h2>
-<section style={{marginTop: '24px'}}>
-  <h2 className="section-title">Cómo aprovechar a Leo en 7 pasos</h2>
-  <ol style={{paddingLeft: '20px', lineHeight: '1.6'}}>
-    <li>Elige el escenario de entrenamiento que necesitas.</li>
-    <li>Activa cámara y micrófono; verifica que todo funcione.</li>
-    <li>Haz clic en <strong>Iniciar Chat de Voz</strong> y saluda al avatar con "Buenos días Doctora".</li>
-    <li>Plantea tu objetivo: diagnóstico, beneficio o cierre.</li>
-    <li>Aplica el modelo Da Vinci y escucha las objeciones.</li>
-    <li>Dispones de 8 minutos por sesion y 30 minutos en el mes.</li>
-    <li>Cuando terminas tu entrevista desconectate. Las personas de Capacitación revisarán con el apoyo de Inteligencia artificial y ofrecerán feedcback. Puede demorar algunas horas. Revisa tu análisis y repite la sesión enfocándote en un punto a mejorar.</li>
-  </ol>
-</section>
+
+          <section style={{ marginTop: '24px' }}>
+            <h2 className="section-title">Cómo aprovechar a Leo en 7 pasos</h2>
+            <ol style={{ paddingLeft: '20px', lineHeight: '1.6' }}>
+              <li>Elige el escenario de entrenamiento que necesitas.</li>
+              <li>Activa cámara y micrófono; verifica que todo funcione.</li>
+              <li>Haz clic en <strong>Iniciar Chat de Voz</strong> y saluda al avatar con "Buenos días Doctora".</li>
+              <li>Plantea tu objetivo: diagnóstico, beneficio o cierre.</li>
+              <li>Aplica el modelo Da Vinci y escucha las objeciones.</li>
+              <li>Dispones de 8 minutos por sesión y 30 minutos en el mes.</li>
+              <li>Cuando termines, desconéctate. Capacitación revisará con apoyo de IA y publicará tu resumen. Revisa tu análisis y repite enfocándote en un punto a mejorar.</li>
+            </ol>
+          </section>
+
           <div className="card-grid">
             <div className="card">
               <h3>Entrevista con Médico</h3>
@@ -353,7 +327,7 @@ html,
             </p>
           </div>
 
-        {/* ---------- Historial de sesiones ---------- */}
+          {/* ---------- Historial de sesiones ---------- */}
           <div className="session-log">
             <h2 className="section-title">Tus sesiones anteriores</h2>
 
@@ -362,56 +336,46 @@ html,
             ) : (
               visibleRecords.map((r) => (
                 <div key={r.id ?? r.created_at} className="session-entry">
-                  {/* Columna A */}
-                  <div>
-                    <h3>{r.scenario}</h3>
-                    <p style={{ margin: 0, fontSize: '0.9rem' }}>
-                      <strong>Fecha:</strong> {r.created_at}
-                    </p>
+                  <h3>{r.scenario}</h3>
+                  <p style={{ margin: 0, fontSize: '0.9rem' }}>
+                    <strong>Fecha:</strong> {r.created_at}
+                  </p>
 
-                    {/* Resumen IA público */}
-                    {r.coach_advice && (
-                      <div className="evaluation-box">
-                        <p>{r.coach_advice}</p>
-                      </div>
-                    )}
+                  {/* Resumen IA público (diplomático) */}
+                  {r.coach_advice && (
+                    <div className="evaluation-box">
+                      <p style={{ marginTop: 0, marginBottom: 8 }}>
+                        <strong>Resumen de tu sesión</strong>
+                      </p>
+                      <p style={{ opacity: 0.9 }}>
+                        Gracias por entrenar con Leo. A continuación verás observaciones breves para tu próxima práctica:
+                      </p>
+                      <p>{r.coach_advice}</p>
+                    </div>
+                  )}
 
-                    {/* Comentario RH */}
-                    {r.rh_evaluation && (
-                      <div className="evaluation-box rh-box">
-                        <p>
-                          <strong>Comentario RH:</strong> {r.rh_evaluation}
-                        </p>
-                      </div>
-                    )}
+                  {/* Mensaje humano (Capacitación) */}
+                  {r.rh_evaluation && (
+                    <div className="evaluation-box rh-box">
+                      <p style={{ marginTop: 0, marginBottom: 8 }}>
+                        <strong>Mensaje de Capacitación</strong>
+                      </p>
+                      <p style={{ opacity: 0.9 }}>
+                        Este mensaje ha sido revisado por el equipo de Capacitación para ayudarte a avanzar con foco y confianza:
+                      </p>
+                      <p>{r.rh_evaluation}</p>
+                    </div>
+                  )}
 
-                    {/* Tip */}
-                    {r.tip && (
-                      <div className="evaluation-box tip-box">
-                        <p>
-                          <strong>Consejo:</strong> {r.tip}
-                        </p>
-                      </div>
-                    )}
-
-                    {/* Feedback visual */}
-                    {r.visual_feedback && (
-                      <div className="evaluation-box visual-feedback-box">
-                        <p>
-                          <strong>Feedback visual:</strong> {r.visual_feedback}
-                        </p>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Columna B: video */}
-                  <div>
-                    {r.video_s3 ? (
-                      <video controls src={r.video_s3} />
-                    ) : (
-                      <p>Video no disponible o procesando.</p>
-                    )}
-                  </div>
+                  {/* Sugerencia ligera */}
+                  {r.tip && (
+                    <div className="evaluation-box tip-box">
+                      <p style={{ marginTop: 0 }}>
+                        <strong>Idea para tu próxima práctica</strong>
+                      </p>
+                      <p>{r.tip}</p>
+                    </div>
+                  )}
                 </div>
               ))
             )}
