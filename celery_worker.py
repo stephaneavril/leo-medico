@@ -1,27 +1,17 @@
-# === celery_worker.py — Transcript-only + Persistencia por el Evaluador (OPC A) ===
+# === celery_worker.py — Transcript-only + Persistencia vía evaluator ===
 """
 Flujo:
-1) Descarga el .webm de S3.
-2) Extrae audio (.wav mono 16 kHz) y lo sube a S3.
-3) Transcribe con AWS Transcribe (ES).
+1) Descarga .webm de S3.
+2) Extrae audio a .wav mono 16 kHz.
+3) Transcribe con AWS Transcribe (idioma configurable).
 4) Llama a evaluate_and_persist(session_id, user_text, "", None)
-   -> El evaluador GUARDA evaluation_rh con todos los campos (Da Vinci, KPIs, etc.)
-5) El worker SOLO actualiza evaluation (public), duration, audio_path (video key), timestamp.
-
-Requisitos:
-- FFMPEG presente en el entorno.
-- Variables de entorno: REDIS_URL, DATABASE_URL, AWS_* (clave/secret/region/bucket),
-  OPENAI_API_KEY (usada por el evaluador), etc.
+   -> GUARDA evaluation_rh con Da Vinci, KPIs, etc.
+5) Actualiza SOLO 'evaluation' (bloque público), 'duration_seconds',
+   'audio_path' (key del video) y 'timestamp'. NO pisa evaluation_rh.
 """
 
 from __future__ import annotations
-import os
-import json
-import time
-import secrets
-import logging
-import subprocess
-import requests
+import os, json, time, secrets, logging, subprocess, requests
 from datetime import datetime
 from urllib.parse import urlparse
 
@@ -31,24 +21,16 @@ import boto3
 from botocore.exceptions import ClientError
 import psycopg2
 
-# Importa la función que también guarda en BD los puntos/metrics
 from evaluator import evaluate_and_persist  # firma: (session_id, user_text, leo_text, video_path)
 
 # ────────────────── CONFIG GENERAL ──────────────────
 load_dotenv()
 
-# Límites de tiempo del worker
 CELERY_SOFT_LIMIT = int(os.getenv("CELERY_SOFT_LIMIT", 600))   # 10 min
 CELERY_HARD_LIMIT = int(os.getenv("CELERY_HARD_LIMIT", 660))   # 11 min
 
-# Celery (Redis) — usa una sola URL para broker/backend
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-celery_app = Celery(
-    "leo_tasks",
-    broker=REDIS_URL,
-    backend=REDIS_URL,
-)
-
+celery_app = Celery("leo_tasks", broker=REDIS_URL, backend=REDIS_URL)
 celery_app.conf.broker_transport_options = {"visibility_timeout": 7200}
 celery_app.conf.update(
     task_track_started=True,
@@ -61,11 +43,9 @@ celery_app.conf.imports = ("celery_worker",)
 
 logging.basicConfig(level=logging.INFO, force=True)
 
-# Directorio temporal
 TMP_DIR = os.getenv("TEMP_PROCESSING_FOLDER", "/tmp/leo_trainer_processing")
 os.makedirs(TMP_DIR, exist_ok=True)
 
-# AWS
 AWS_S3_BUCKET_NAME     = os.getenv("AWS_S3_BUCKET_NAME", "").split("#", 1)[0].strip().strip("'\"")
 AWS_S3_REGION_NAME     = os.getenv("AWS_S3_REGION_NAME", "us-east-1")
 AWS_ACCESS_KEY_ID      = os.getenv("AWS_ACCESS_KEY_ID")
@@ -77,7 +57,6 @@ s3 = boto3.client(
     aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
     region_name=AWS_S3_REGION_NAME,
 )
-
 transcribe = boto3.client(
     "transcribe",
     aws_access_key_id=AWS_ACCESS_KEY_ID,
@@ -85,12 +64,13 @@ transcribe = boto3.client(
     region_name=AWS_S3_REGION_NAME,
 )
 
-# BD
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL env var not set")
 
-# ────────────────── HELPERS S3 / FFMPEG ──────────────────
+TRANSCRIBE_LANG = os.getenv("AWS_TRANSCRIBE_LANG", "es-MX")   # ajustable
+
+# ────────────────── HELPERS S3/FFMPEG/DB ──────────────────
 
 def dl_s3(bucket: str, key: str, dst: str) -> bool:
     try:
@@ -110,41 +90,24 @@ def up_s3(src: str, bucket: str, key: str) -> str | None:
 
 def run_ffmpeg_to_wav(src_webm: str, dst_wav: str) -> bool:
     try:
-        # -vn: sin video; -ar 16000: 16 kHz; -ac 1: mono
         subprocess.run(
             ["ffmpeg", "-i", src_webm, "-vn", "-ar", "16000", "-ac", "1", "-y", dst_wav],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            check=True,
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, check=True
         )
         return True
     except subprocess.CalledProcessError as e:
         logging.error("[FFMPEG] %s", e.stderr.decode(errors="ignore"))
         return False
 
-# ────────────────── HELPERS BD ──────────────────
-
 def db_conn():
     p = urlparse(DATABASE_URL)
     return psycopg2.connect(
-        database=p.path.lstrip("/"),
-        user=p.username,
-        password=p.password,
-        host=p.hostname,
-        port=p.port,
-        sslmode="require",
+        database=p.path.lstrip("/"), user=p.username, password=p.password,
+        host=p.hostname, port=p.port, sslmode="require",
     )
 
-def _update_db_only_public(
-    sid: int,
-    public_text: str,
-    duration_seconds: int,
-    video_key: str | None,
-    timestamp_iso: str | None,
-):
-    """
-    Importante: NO toca evaluation_rh (ya la guardó evaluate_and_persist).
-    """
+def _update_db_only_public(sid: int, public_text: str, duration_seconds: int, video_key: str | None, timestamp_iso: str | None):
+    """NO toca evaluation_rh (ya la guardó evaluate_and_persist)."""
     conn = db_conn()
     cur = conn.cursor()
     cur.execute(
@@ -160,6 +123,14 @@ def _update_db_only_public(
     conn.commit()
     conn.close()
 
+def _safe_rm(*paths: str):
+    for p in paths:
+        try:
+            if p and os.path.exists(p):
+                os.remove(p)
+        except Exception:
+            pass
+
 # ────────────────── TASK ──────────────────
 
 @celery_app.task(
@@ -170,11 +141,10 @@ def _update_db_only_public(
 )
 def process_session_transcript(self, payload: dict):
     """
-    Procesa sesión analizando SOLO el transcript del usuario.
-    payload esperado:
-      - session_id (int)
-      - video_object_key (str)  → clave en S3 del .webm
-      - duration (int, opcional)
+    payload:
+      - session_id (int)            obligatorio
+      - video_object_key (str)      obligatorio (clave S3 del .webm)
+      - duration (int)              opcional
     """
     logging.info("🟢 START task=%s payload=%s", self.request.id, payload)
 
@@ -214,10 +184,10 @@ def process_session_transcript(self, payload: dict):
                 TranscriptionJobName=job,
                 Media={"MediaFileUri": audio_url},
                 MediaFormat="wav",
-                LanguageCode="es-US",  # ajusta si necesitas es-MX
+                LanguageCode=TRANSCRIBE_LANG,  # ej. es-MX / es-US / es-ES
             )
-            # Espera con polling simple
-            for _ in range(60):  # ~8 min máx (60 * 8s)
+            # Polling simple
+            for _ in range(60):  # hasta ~8 min (60 * 8s)
                 status = transcribe.get_transcription_job(TranscriptionJobName=job)["TranscriptionJob"]
                 state = status["TranscriptionJobStatus"]
                 if state in {"COMPLETED", "FAILED"}:
@@ -231,37 +201,30 @@ def process_session_transcript(self, payload: dict):
         except Exception as e:
             logging.exception("[TRANSCRIBE] sid=%s error=%s", sid, e)
 
-    # Clip para tokens seguros
+    # Clip de seguridad por tokens
     MAX_CHARS = 24_000
     user_txt = (user_txt or "")[-MAX_CHARS:]
 
-    # 4) Evalúa y PERSISTE (puntos, fases, KPIs, etc.) vía evaluator
-    #    -> evaluate_and_persist(sid, user_txt, leo_text, video_path)
+    # 4) Evalúa y PERSISTE (evaluation_rh) vía evaluator
     try:
         res = evaluate_and_persist(sid, user_txt, "", None)
         public_text = res.get("public", "Evaluación generada.")
+        internal_preview = res.get("internal", {}) or {}
+        dv_total = (internal_preview.get("da_vinci_points") or {}).get("total")
+        logging.info("[EVAL OK] sid=%s dv_total=%s kpi_avg=%s",
+                     sid, dv_total, (internal_preview.get("kpis") or {}).get("avg_score"))
     except Exception as e:
         logging.exception("[EVALUATE_PERSIST] sid=%s error=%s", sid, e)
         public_text = "⚠️ Evaluación automática no disponible."
 
-    # 5) Actualiza SOLO los campos públicos y operativos (NO evaluation_rh)
+    # 5) Actualiza SOLO campos públicos/operativos
     _update_db_only_public(sid, public_text, dur, vkey, ts_iso)
 
-    # 6) Limpieza archivos temporales
+    # 6) Limpieza
     _safe_rm(webm, wav)
     logging.info("✅ DONE task=%s sid=%s", self.request.id, sid)
 
-# ────────────────── UTILS ──────────────────
-
-def _safe_rm(*paths: str):
-    for p in paths:
-        try:
-            if p and os.path.exists(p):
-                os.remove(p)
-        except Exception:
-            pass
-
-# ────────────────── INIT DB (por si falta) ──────────────────
+# ────────────────── INIT DB (defensivo) ──────────────────
 
 def init_db():
     conn = db_conn()
