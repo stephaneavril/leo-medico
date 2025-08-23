@@ -18,7 +18,6 @@ from botocore.exceptions import ClientError
 import re
 from flask import Flask, request, redirect, url_for, flash, render_template
 
-
 # 1) Carga variables de entorno
 load_dotenv(override=True)
 
@@ -74,7 +73,7 @@ if not AWS_ACCESS_KEY_ID:
 if not AWS_SECRET_ACCESS_KEY:
     print("ERROR: AWS_SECRET_ACCESS_KEY is not set in .env")
 if not AWS_S3_BUCKET_NAME:
-    print("ERROR: AWS_S3_BUCKET_NAME is not set in .env") # This is what we expect to debug
+    print("ERROR: AWS_S3_BUCKET_NAME is not set in .env")
 
 s3_client = boto3.client(
     's3',
@@ -158,7 +157,8 @@ def init_db():
                 tip TEXT,
                 visual_feedback TEXT,
                 visible_to_user BOOLEAN DEFAULT FALSE,
-                avatar_transcript TEXT
+                avatar_transcript TEXT,
+                rh_comment TEXT
             );
         ''')
         c.execute('''
@@ -254,11 +254,9 @@ def patch_db_schema():
         if conn:
             conn.close()
 
-
 # Ejecuta al iniciar la aplicación
 init_db()
 patch_db_schema()
-
 
 def upload_file_to_s3(file_path, bucket, object_name=None):
     """Sube un archivo a un bucket de S3"""
@@ -354,7 +352,6 @@ def check_user_token(email: str, token: str) -> bool:
             )
             row = cur.fetchone()
 
-        # ─── N O  M O V E R  ───────────────────────────────────────────
         if not row:                   # usuario no existe
             return False
 
@@ -390,53 +387,160 @@ def logout():
     session.clear()
     return redirect("/login")
 
-# Inside app.py, add this helper function
+# -----------------------------
+# Limpieza de textos para UI
+# -----------------------------
 def clean_display_text(text: str) -> str:
     if not isinstance(text, str):
         return ""
 
-    # Normalize common spaces/newlines before splitting
     text = text.replace('\r\n', ' ').replace('\n', ' ').strip()
 
-    # Replace common escaped UTF-8 sequences if they appear literally
-    # This is a heuristic for specific mis-encodings like "\303\251" becoming literal text
-    text = text.replace('\\303\\251', 'é') # Common for 'é'
-    text = text.replace('\\303\\241', 'á') # For 'á'
-    text = text.replace('\\303\\255', 'í') # For 'í'
-    text = text.replace('\\303\\263', 'ó') # For 'ó'
-    text = text.replace('\\303\\272', 'ú') # For 'ú'
-    text = text.replace('\\303\\261', 'ñ') # For 'ñ'
-    text = text.replace('\\302\\277', '¿') # For '¿'
-    text = text.replace('\\302\\241', '¡') # For '¡'
+    text = text.replace('\\303\\251', 'é')
+    text = text.replace('\\303\\241', 'á')
+    text = text.replace('\\303\\255', 'í')
+    text = text.replace('\\303\\263', 'ó')
+    text = text.replace('\\303\\272', 'ú')
+    text = text.replace('\\303\\261', 'ñ')
+    text = text.replace('\\302\\277', '¿')
+    text = text.replace('\\302\\241', '¡')
 
-    # Attempt to remove repeated words/phrases (heuristic)
     words = text.split(' ')
     cleaned_words_list = []
     last_word = None
     for word in words:
-        if word != last_word: # Simple check for direct word repetition
+        if word != last_word:
             cleaned_words_list.append(word)
         last_word = word
     text = ' '.join(cleaned_words_list)
 
-    # Remove consecutive repeated characters (e.g., "Buenoos" -> "Buenos")
-    # This regex replaces 'aa', 'bb', etc. with 'a', 'b' only if they appear 3 or more times
-    text = re.sub(r'(.)\1{2,}', r'\1\1', text) # Keep at least two, e.g., "hellooo" -> "helloo"
-
-    # Fix consecutive repeated words like "hola hola" -> "hola"
-    # This regex is more robust for actual word repetitions
+    text = re.sub(r'(.)\1{2,}', r'\1\1', text)
     text = re.sub(r'\b(\w+)\s+\1\b', r'\1', text, flags=re.IGNORECASE)
-
-    # Further cleaning for concatenated words without space (e.g., "diasdias" -> "dias dias")
-    # This pattern looks for a word repeated immediately without a space in between, but is very aggressive.
-    # It might be better to skip this if it causes false positives.
-    # For 'HolaHola' specifically, you might want to specifically replace it.
-    # text = re.sub(r'([a-zA-ZáéíóúÁÉÍÓÚñÑ]+?)\1([a-zA-ZáéíóúÁÉÍÓÚñÑ]*)', r'\1 \1\2', text)
-
-    # Fix multiple spaces
     text = re.sub(r'\s+', ' ', text).strip()
 
     return text
+
+# -----------------------------------------------------------
+# NUEVO: Resumen de Calificación por Usuario (server-side)
+# -----------------------------------------------------------
+from collections import defaultdict
+
+def _parse_frac(txt: str, default=(0, 1)) -> tuple[int, int]:
+    """
+    Convierte '3/5' -> (3,5). Devuelve default si falla.
+    """
+    try:
+        a, b = str(txt).split("/")
+        return int(a), max(1, int(b))
+    except Exception:
+        return default
+
+def _safe_get(dic, path, default=None):
+    """
+    Acceso seguro tipo _safe_get(d, 'a.b.c', default)
+    """
+    try:
+        cur = dic
+        for key in path.split("."):
+            cur = cur.get(key, {})
+        return cur if cur != {} else default
+    except Exception:
+        return default
+
+def build_performance_summaries(processed_data: list[list]) -> list[dict]:
+    """
+    processed_data: filas que arma admin_panel para el template:
+      [0:id, 1:name, 2:email, 3:scenario, 4:user_msgs[], 5:avatar_msgs[],
+       6:video_url, 7:timestamp, 8:public, 9:internal_dict, 10:tip, 11:visual, 12:visible_to_user]
+    """
+    by_user = defaultdict(lambda: {
+        "name": "",
+        "email": "",
+        "sessions": 0,
+        "dv_points": [],
+        "steps_pct": [],
+        "legacy_k": [],
+        "red_flags": 0,
+        "last_date": None
+    })
+
+    for row in processed_data:
+        try:
+            name  = row[1] or ""
+            email = row[2] or ""
+            internal = row[9] if isinstance(row[9], dict) else {}
+            ts = row[7] or ""
+
+            # Da Vinci points
+            dv = internal.get("da_vinci_points") or internal.get("abbott_points") or {}
+            dv_total = int(dv.get("total", 0))
+
+            # Steps applied count "X/5"
+            steps_str = _safe_get(internal, "da_vinci_step_flags.steps_applied_count", "0/5")
+            steps_num, steps_den = _parse_frac(steps_str, (0, 5))
+            steps_pct = (steps_num / max(1, steps_den)) * 100.0
+
+            # Knowledge legacy "N/8"
+            legacy_str = internal.get("knowledge_score_legacy", "0/8")
+            legacy_num, legacy_den = _parse_frac(legacy_str, (0, 8))
+            legacy_pct = (legacy_num / max(1, legacy_den)) * 100.0
+
+            # Composite score: 50% dv_norm + 50% legacy_pct
+            # dv_norm: normalizamos a 8 puntos como techo razonable
+            dv_norm = min(dv_total, 8) / 8.0 * 100.0
+            composite = 0.5 * dv_norm + 0.5 * legacy_pct
+
+            # Red flags
+            red = 1 if internal.get("disqualifying_phrases_detected") else 0
+
+            bucket = by_user[email]
+            bucket["name"]   = name
+            bucket["email"]  = email
+            bucket["sessions"] += 1
+            bucket["dv_points"].append(dv_total)
+            bucket["steps_pct"].append(steps_pct)
+            bucket["legacy_k"].append(legacy_num)   # guardo el numerador para promedio 0–8
+            bucket["red_flags"] += red
+            # última fecha
+            if ts:
+                try:
+                    # si viene ISO
+                    dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+                except Exception:
+                    dt = None
+                if dt:
+                    if not bucket["last_date"] or dt > bucket["last_date"]:
+                        bucket["last_date"] = dt
+        except Exception as e:
+            print(f"[perf_summaries] fila omitida por error: {e}")
+
+    summaries = []
+    for email, agg in by_user.items():
+        sessions = max(1, agg["sessions"])
+        avg_dv = sum(agg["dv_points"]) / sessions
+        avg_steps_pct = sum(agg["steps_pct"]) / sessions
+        avg_legacy_num = sum(agg["legacy_k"]) / sessions        # 0–8
+        # recomponemos el compuesto con el mismo criterio
+        dv_norm = min(avg_dv, 8) / 8.0 * 100.0
+        legacy_pct = (avg_legacy_num / 8.0) * 100.0
+        avg_score = 0.5 * dv_norm + 0.5 * legacy_pct
+
+        last_date_str = agg["last_date"].strftime("%Y-%m-%d %H:%M") if agg["last_date"] else "—"
+        summaries.append({
+            "name": agg["name"],
+            "email": agg["email"],
+            "sessions_published": sessions,
+            "avg_score": round(avg_score, 1),
+            "avg_dv_points": round(avg_dv, 1),
+            "avg_steps_pct": round(avg_steps_pct, 0),
+            "avg_legacy": round(avg_legacy_num, 1),
+            "red_flags": int(agg["red_flags"]),
+            "last_date": last_date_str
+        })
+
+    # Ordena por mejor avg_score desc
+    summaries.sort(key=lambda x: x["avg_score"], reverse=True)
+    return summaries
 
 @app.route("/admin", methods=["GET", "POST"])
 def admin_panel():
@@ -482,7 +586,7 @@ def admin_panel():
         c.execute("""
             SELECT id, name, email, scenario, message, response, audio_path,
                     timestamp, evaluation, evaluation_rh, tip, visual_feedback,
-                    visible_to_user         
+                    visible_to_user
             FROM interactions
             ORDER BY timestamp DESC
         """)
@@ -491,111 +595,78 @@ def admin_panel():
         processed_data = []
         for row in raw_data:
             try:
-                # Original DB row structure (from SELECT query):
-                # (id, name, email, scenario, message, response, audio_path, timestamp, evaluation, evaluation_rh, tip, visual_feedback)
-                # Indices:
-                # 0: id
-                # 1: name
-                # 2: email
-                # 3: scenario
-                # 4: message (user_transcript)
-                # 5: response (avatar_transcript)
-                # 6: audio_path (video_s3)
-                # 7: timestamp
-                # 8: evaluation (public_summary)
-                # 9: evaluation_rh (raw JSON string)
-                # 10: tip
-                # 11: visual_feedback
-                # 12: visible_to_user
-
-                # Safely parse JSON fields
                 user_dialogue_raw = json.loads(row[4]) if row[4] else []
                 avatar_dialogue_raw = json.loads(row[5]) if row[5] else []
                 if not isinstance(user_dialogue_raw, list):
-                    # If it's a single string (not a list of segments), wrap it as a single segment
                     user_dialogue_raw = [str(user_dialogue_raw)]
                 if not isinstance(avatar_dialogue_raw, list):
-                    # If it's a single string (not a list of segments), wrap it as a single segment
                     avatar_dialogue_raw = [str(avatar_dialogue_raw)]
 
-                # Clean each individual segment. Ensure string conversion before strip/clean.
                 cleaned_user_segments = [clean_display_text(str(s).strip()) for s in user_dialogue_raw if str(s).strip()]
                 cleaned_avatar_segments = [clean_display_text(str(s).strip()) for s in avatar_dialogue_raw if str(s).strip()]
 
-                # Clean name, email, and scenario for display. Use correct DB indices and ensure string conversion.
-                cleaned_name = clean_display_text(str(row[1])) if row[1] else "" # DB row[1] is name
-                cleaned_email = clean_display_text(str(row[2])) if row[2] else "" # DB row[2] is email
-                cleaned_scenario = clean_display_text(str(row[3])) if row[3] else "" # DB row[3] is scenario
+                cleaned_name = clean_display_text(str(row[1])) if row[1] else ""
+                cleaned_email = clean_display_text(str(row[2])) if row[2] else ""
+                cleaned_scenario = clean_display_text(str(row[3])) if row[3] else ""
 
-                # Parse RH evaluation
                 try:
                     parsed_rh_evaluation = json.loads(row[9])
                     if not parsed_rh_evaluation:
-                      parsed_rh_evaluation = {"status": "No hay análisis de RH disponible."}
+                        parsed_rh_evaluation = {"status": "No hay análisis de RH disponible."}
                 except (json.JSONDecodeError, TypeError):
                     parsed_rh_evaluation = {"status": "No hay análisis de RH disponible."}
 
-
-                    # --- NUEVO ---
-                if row[6]:                                   # row[6] = s3_key
+                if row[6]:
                     video_url_for_template = f"/video/{row[6]}"
                 else:
                     video_url_for_template = None
-# --------------
-                # Construct the row for the template with consistent indexing
-                # This list's indices should correspond to what admin.html now expects.
+
                 current_processed_row = [
-                    row[0], # 0: ID (for delete button form action)
-                    cleaned_name, # 1: Name (for h3 display)
-                    cleaned_email, # 2: Email (for h3 display)
-                    cleaned_scenario, # 3: Scenario (for scenario display)
-                    cleaned_user_segments, # 4: User dialogue (list of segments)
-                    cleaned_avatar_segments, # 5: Avatar dialogue (list of segments)
-                    video_url_for_template, # 6: Video URL (audio_path)
-                    row[7], # 7: Timestamp
-                    row[8], # 8: Public Summary (evaluation)
-                    parsed_rh_evaluation, # 9: RH evaluation (full dict for detailed analysis)
-                    row[10], # 10: Tip
-                    row[11], # 11: Visual feedback
-                    row[12] # 12: visible_to_user
+                    row[0],                # 0: ID
+                    cleaned_name,          # 1: Name
+                    cleaned_email,         # 2: Email
+                    cleaned_scenario,      # 3: Scenario
+                    cleaned_user_segments, # 4: User dialogue (list)
+                    cleaned_avatar_segments,#5: Avatar dialogue (list)
+                    video_url_for_template,# 6: Video URL
+                    row[7],                # 7: Timestamp
+                    row[8],                # 8: Public Summary
+                    parsed_rh_evaluation,  # 9: Internal JSON
+                    row[10],               # 10: Tip
+                    row[11],               # 11: Visual feedback
+                    row[12]                # 12: visible_to_user
                 ]
 
-                # Filling in default messages if certain fields are empty
-                if not current_processed_row[8]: # Public summary (index 8)
+                if not current_processed_row[8]:
                     current_processed_row[8] = "Análisis IA pendiente."
-                if not current_processed_row[10]: # Tip (index 10)
+                if not current_processed_row[10]:
                     current_processed_row[10] = "Consejo pendiente."
-                if not current_processed_row[11]: # Visual Feedback (index 11)
+                if not current_processed_row[11]:
                     current_processed_row[11] = "Análisis visual pendiente."
 
                 processed_data.append(current_processed_row)
 
             except Exception as e:
                 print(f"Error processing row from database: {e}. Raw row: {row}")
-                # Directly construct the placeholder list for error cases
                 processed_data.append([
-                    row[0] if len(row) > 0 else "N/A", # 0: ID (if available)
-                    "Error", # 1: Name
-                    "Error", # 2: Email
-                    "Error al cargar", # 3: Scenario
-                    ["Error al cargar transcripción del participante."], # 4: User segments
-                    ["Error al cargar transcripción del avatar."], # 5: Avatar segments
-                    None, # 6: Video URL
-                    "N/A", # 7: Timestamp
-                    f"Error de procesamiento: {str(e)}", # 8: Public Summary
-                    {"status": f"Error al cargar análisis de RH: {str(e)}"}, # 9: RH Evaluation (dict)
-                    "Error al cargar consejo.", # 10: Tip
-                    "Error al cargar feedback visual.", # 11: Visual Feedback
-                    "N/A"   # 12: visible_to_user placeholder
+                    row[0] if len(row) > 0 else "N/A",
+                    "Error",
+                    "Error",
+                    "Error al cargar",
+                    ["Error al cargar transcripción del participante."],
+                    ["Error al cargar transcripción del avatar."],
+                    None,
+                    "N/A",
+                    f"Error de procesamiento: {str(e)}",
+                    {"status": f"Error al cargar análisis de RH: {str(e)}"},
+                    "Error al cargar consejo.",
+                    "Error al cargar feedback visual.",
+                    "N/A"
                 ])
 
         c.execute("SELECT id, name, email, start_date, end_date, active, token FROM users")
         users = c.fetchall()
 
-        # Assuming the 'usage_summaries' query will still return correct data (from dashboard_data example).
-        # If your `get_db_connection()` doesn't return a RealDictCursor by default for all queries,
-        # ensure this part is adapted to use tuple indexing if needed.
-        # However, the provided dashboard_data function *does* use RealDictCursor, so for consistency:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur_usage:
             cur_usage.execute("""
                 SELECT u.name, u.email, COALESCE(SUM(i.duration_seconds), 0) AS total_seconds_used
@@ -605,11 +676,9 @@ def admin_panel():
             """)
             usage_rows = cur_usage.fetchall()
 
-
         usage_summaries = []
         total_minutes_all_users = 0
         for row_data in usage_rows:
-            # Accessing by key as RealDictCursor is used for this query
             name_u = row_data.get('name', "Unknown")
             email_u = row_data.get('email', "Unknown")
             secs = row_data.get('total_seconds_used', 0)
@@ -626,6 +695,9 @@ def admin_panel():
 
         contracted_minutes = 1050
 
+        # >>> NUEVO: construir resumen de calificación por usuario
+        performance_summaries = build_performance_summaries(processed_data)
+
     except Exception as e:
         print(f"Error en el panel de administración (PostgreSQL): {e}")
         if conn:
@@ -641,7 +713,8 @@ def admin_panel():
         users=users,
         usage_summaries=usage_summaries,
         total_minutes=total_minutes_all_users,
-        contracted_minutes=contracted_minutes
+        contracted_minutes=contracted_minutes,
+        performance_summaries=performance_summaries   # ⬅️ pasa el resumen al template
     )
 
 # --- app.py ----------------------------------------------------------
@@ -683,13 +756,13 @@ def start_session():
     if not active or not (start <= today <= end):
         return "Sin vigencia.", 403
 
-    # 3. Crear JWT válido 2 min
+    # 3. Crear JWT válido 1 h
     payload = {
-    "name":     name,
-    "email":    email,
-    "scenario": scenario,
-    "iat": dt_module.datetime.utcnow(),
-    "exp": dt_module.datetime.utcnow() + dt_module.timedelta(hours=1),
+        "name":     name,
+        "email":    email,
+        "scenario": scenario,
+        "iat": dt_module.datetime.utcnow(),
+        "exp": dt_module.datetime.utcnow() + dt_module.timedelta(hours=1),
     }
     token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG)
 
@@ -697,7 +770,6 @@ def start_session():
     url = f"{FRONTEND_URL}/dashboard?auth={token}"
     print("DEBUG_REDIRECT ->", url)
     return redirect(url, code=302)
-
 
 @app.route("/validate_user", methods=["POST"])
 def validate_user_endpoint():
@@ -740,37 +812,32 @@ def validate_user_endpoint():
 from flask import jsonify
 from flask_cors import cross_origin
 import psycopg2.extras
-import json                           # <──  te hace falta para json.loads
+import json
 
-# Define SENTINELS aquí también si tu app.py usa esta lógica en otro lugar,
-# o asegúrate de que esté definida donde la uses.
 SENTINELS = [
   'Video_Not_Available_Error',
   'Video_Processing_Failed',
   'Video_Missing_Error',
 ]
+
 from functools import wraps
 from flask import request, jsonify
 
 def jwt_required(f):
     @wraps(f)
     def _wrap(*args, **kwargs):
-        # 1) Leer el header Authorization
         auth = request.headers.get("Authorization", "")
         print(f"[🔐 DEBUG JWT] Authorization header completo: {auth!r}")
 
-        # 2) Extraer token
         token = None
         if auth.startswith("Bearer "):
             token = auth.split("Bearer ", 1)[1]
         print(f"[🔐 DEBUG JWT] Token extraído: {token!r}")
 
-        # 3) Si falta token
         if not token:
             print("[🔐 DEBUG JWT ERROR] No se encontró token en la cabecera")
             return jsonify(error="token faltante"), 401
 
-        # 4) Intentar decodificarlo
         try:
             payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
             print(f"[🔐 DEBUG JWT] jwt.decode OK → payload: {payload}")
@@ -779,7 +846,6 @@ def jwt_required(f):
             print(f"[🔐 DEBUG JWT ERROR] jwt.decode falló: {e}")
             return jsonify(error="token inválido o usuario no autorizado"), 401
 
-        # 5) Si todo bien, seguimos
         return f(*args, **kwargs)
     return _wrap
 
@@ -792,7 +858,6 @@ def dashboard_data():
     try:
         print(f"[DEBUG_DASHBOARD] JWT ok para {email}")
 
-        # 1. Traemos las sesiones de la BD
         conn = get_db_connection()
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
@@ -819,9 +884,8 @@ def dashboard_data():
 
         sessions_to_send = []
         for row in raw_rows:
-            processed = dict(row)           # ← copia mutable
+            processed = dict(row)
 
-            # ── 1. Transcripciones a texto plano ─────────────────
             for field in ("user_transcript", "avatar_transcript"):
                 raw = processed.get(field, "[]")
                 try:
@@ -829,7 +893,6 @@ def dashboard_data():
                 except (json.JSONDecodeError, TypeError):
                     processed[field] = raw
 
-            # ── 2. URL firmada del video (si aplica) ────────────
             s3_key = processed.get("video_s3")
             if s3_key and s3_key not in SENTINELS:
                 try:
@@ -843,7 +906,6 @@ def dashboard_data():
             else:
                 processed["video_s3"] = None
 
-            # ── 3. Mostrar/ocultar análisis según visible_to_user ─
             if processed.get("visible_to_user"):
                 processed["coach_advice"]  = processed.get("coach_advice", "")
                 processed["rh_evaluation"] = processed.get("rh_comment", "")
@@ -851,9 +913,8 @@ def dashboard_data():
                 processed["coach_advice"]  = ""
                 processed["rh_evaluation"] = ""
 
-            sessions_to_send.append(processed)   # ¡solo una vez!
+            sessions_to_send.append(processed)
 
-        # 4. Minutos usados
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT COALESCE(SUM(duration_seconds),0) FROM interactions WHERE email=%s",
@@ -861,7 +922,6 @@ def dashboard_data():
             )
             total_used_seconds = cur.fetchone()[0]
 
-        # 5. Enviamos respuesta
         auth_header = request.headers.get("Authorization", "")
         user_token  = auth_header.replace("Bearer ", "") if auth_header.startswith("Bearer ") else auth_header
 
@@ -893,7 +953,6 @@ def serve_video(filename):
 @app.route('/upload_video', methods=['POST'])
 @jwt_required
 def upload_video():
-    # ... tu lógica actual es correcta aquí, ya que usa el token del decorador
     email = request.jwt["email"]
     video_file = request.files.get('video')
 
@@ -928,7 +987,6 @@ def _as_json_list(txt: Union[str, list]) -> str:
     if isinstance(txt, list):
         return json.dumps(txt)
     if isinstance(txt, str):
-        # divide en líneas si viene todo junto
         return json.dumps([l for l in txt.splitlines() if l.strip()])
     return json.dumps([])
 
@@ -939,7 +997,6 @@ def _as_json_list(txt: Union[str, list]) -> str:
 def log_full_session():
     data = request.get_json() or {}
 
-    # 0) Campos mínimos que esperamos
     name             = data.get("name")
     email            = data.get("email")
     scenario         = data.get("scenario")
@@ -948,19 +1005,15 @@ def log_full_session():
     user_raw         = data.get("conversation", "")
     avatar_raw       = data.get("avatar_transcript", "")
 
-    # 1) Normalizamos SIEMPRE a JSON-list para evitar errores de parseo después
     user_json   = _as_json_list(user_raw)
     avatar_json = _as_json_list(avatar_raw)
 
-    # 2) Resúmenes / tips  ——  (por ahora placeholders vacíos → generarás después)
-    public_summary       = data.get("evaluation",       "")  # IA externa
-    internal_summary_db  = data.get("evaluation_rh",    "")  # RH interna
+    public_summary       = data.get("evaluation",       "")
+    internal_summary_db  = data.get("evaluation_rh",    "")
     tip_text             = data.get("tip",              "")
     posture_feedback     = data.get("visual_feedback",  "")
 
-    # 3) Timestamp estándar ISO-UTC
-    timestamp_iso = datetime.utcnow().isoformat()    
-    # 4) Montamos URL S3 completa *solo si* tenemos key
+    timestamp_iso = datetime.utcnow().isoformat()
     video_url = (
         f"https://{AWS_S3_BUCKET_NAME}.s3.{AWS_S3_REGION_NAME}.amazonaws.com/{video_key}"
         if video_key else None
@@ -975,7 +1028,7 @@ def log_full_session():
                 INSERT INTO interactions
                        (name, email, scenario,
                         message, response,
-                        audio_path,            -- guardamos la key (no la URL)
+                        audio_path,
                         timestamp,
                         evaluation, evaluation_rh,
                         duration_seconds,
@@ -987,7 +1040,7 @@ def log_full_session():
                     name, email, scenario,
                     user_json,
                     avatar_json,
-                    video_key,            # se servirá vía /video/<key>
+                    video_key,
                     timestamp_iso,
                     public_summary,
                     internal_summary_db,
@@ -1001,30 +1054,24 @@ def log_full_session():
         
         print(f"[DB] Sesión #{session_id} registrada correctamente.")
         
-
         # ───────── LANZA LA TAREA CELERY ─────────
-        from celery_worker import process_session_transcript   # o el nombre real
+        from celery_worker import process_session_transcript
         
-      # ─── 2. construye el payload ───
         task_data = {
             "session_id":      session_id,
-            "duration":        duration,          # opcional, para métricas
+            "duration":        duration,
             "video_object_key": video_key,
-            "user_transcript": user_json          # ⬅️  solo el texto del usuario
-            # (si quisieras seguir guardando la key del video –p. ej. para reproducirlo
-            # en el panel RH– ponla en la BD como ya haces, pero NO hace falta enviarla)
+            "user_transcript": user_json
         }
 
-        # ─── 3. lanza la tarea ───
-        result = process_session_transcript.delay(task_data)          # ← añade result =
-
+        result = process_session_transcript.delay(task_data)
         app.logger.info("🚀  Sesión %s ENCOLADA (task_id=%s)", session_id, result.id)
-        # ─────────────────────────────────────────
+
         return jsonify(
             {
                 "status": "success",
                 "session_id": session_id,
-                "video_url": video_url,  # por si el front la necesita
+                "video_url": video_url,
                 "message": "Sesión registrada.",
             }
         ), 200

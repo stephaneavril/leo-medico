@@ -281,7 +281,7 @@
         </p>
         {% endif %}
 
-        <!-- Comentario de Capacitación + publicar -->
+        <!-- Comentario de Capacitación + publicar (sin formularios anidados) -->
         <form action="/admin/publish_eval/{{ row[0] }}" method="POST" style="margin-top: 20px">
           <label for="comment_{{ row[0] }}"><strong>Comentario de Capacitación:</strong></label><br />
           <textarea
@@ -295,10 +295,12 @@
           {% if not row[12] %}
             <button type="submit" style="margin-top: 10px; width: 100%">✅ Publicar al usuario</button>
 
-            <!-- Botón alternativo: publicar IA tal cual -->
-            <form action="/admin/publish_ai/{{ row[0] }}" method="POST" style="margin-top: 10px">
-              <button type="submit" style="width: 100%; background: #00bfff; color: #000">🤖 Publicar análisis IA tal cual</button>
-            </form>
+            <button type="submit"
+                    formaction="/admin/publish_ai/{{ row[0] }}"
+                    formmethod="POST"
+                    style="margin-top: 10px; width: 100%; background: #00bfff; color: #000">
+              🤖 Publicar análisis IA tal cual
+            </button>
           {% else %}
             <p style="color: green; font-weight: 600; margin-top: 12px; text-align: center;">
               Publicado en dashboard
@@ -330,13 +332,48 @@
       </table>
 
       <h3 style="margin-top: 20px">
-        Tiempo Total Usado: {{ total_minutes }} / 1050 min
+        Tiempo Total Usado: {{ total_minutes }} / {{ contracted_minutes }} min
       </h3>
       <div class="progress-bar">
-        <div class="progress-fill" style="width: {{ (total_minutes / 1050) * 100 }}%">
-          <span>{{ (total_minutes / 1050) * 100 | round(1) }}%</span>
+        <div class="progress-fill" style="width: {{ (total_minutes / contracted_minutes) * 100 }}%">
+          <span>{{ (total_minutes / contracted_minutes) * 100 | round(1) }}%</span>
         </div>
       </div>
+    </div>
+
+    <!-- ===== RESUMEN DE DESEMPEÑO ===== -->
+    <h2 class="section-title">⭐ Resumen de Desempeño por Usuario</h2>
+    <div class="summary-row">
+      <table>
+        <tr>
+          <th>Nombre</th>
+          <th>Email</th>
+          <th>Sesiones consideradas</th>
+          <th>Puntaje promedio</th>
+          <th>Puntos Da Vinci (prom.)</th>
+          <th>% Fases aplicadas (prom.)</th>
+          <th>Conocimiento (legacy prom.)</th>
+          <th>Alertas</th>
+          <th>Última sesión</th>
+        </tr>
+        {% if performance_summaries and performance_summaries|length > 0 %}
+          {% for p in performance_summaries %}
+          <tr>
+            <td>{{ p.name }}</td>
+            <td>{{ p.email }}</td>
+            <td>{{ p.sessions_published }}</td>
+            <td><strong>{{ '%.1f'|format(p.avg_score) }}</strong></td>
+            <td>{{ '%.1f'|format(p.avg_dv_points) }}</td>
+            <td>{{ '%.0f'|format(p.avg_steps_pct) }}%</td>
+            <td>{{ '%.1f'|format(p.avg_legacy) }}/8</td>
+            <td>{{ p.red_flags }}</td>
+            <td>{{ p.last_date }}</td>
+          </tr>
+          {% endfor %}
+        {% else %}
+          <tr><td colspan="9" style="text-align:center;color:#777">Sin datos aún</td></tr>
+        {% endif %}
+      </table>
     </div>
 
     <!-- ===== GESTIÓN DE USUARIOS ===== -->
