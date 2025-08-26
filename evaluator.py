@@ -50,18 +50,38 @@ def normalize(txt: str) -> str:
     return t
 
 def canonicalize_products(nt: str) -> str:
-    """Normaliza variantes del producto a 'esoxx-one' (tolerante a ASR)."""
-    variants = [
+    """
+    Normaliza variantes del producto a 'esoxx-one' y 'sinair' (tolerante a ASR).
+    """
+    # ESOXX-ONE
+    variants_esoxx = [
         r"\beso\s*xx\s*one\b", r"\besox+\s*one\b", r"\besoxx-one\b",
         r"\besof+\s*one\b", r"\becox+\s*one\b", r"\besox+\b", r"\besof+\b",
         r"\becox+\b", r"\beso\s*xx\b", r"\besoft\s*one\b", r"\besoxxone\b",
-        r"\bays?oks?\b", r"\bays?oks?\s*one\b", r"\besok+\b",
-        r"\besoxx one\b",
+        r"\bays?oks?\b", r"\bays?oks?\s*one\b", r"\besok+\b", r"\besoxx one\b",
+    ]
+    # SINAIR (variantes comunes de ASR)
+    variants_sinair = [
+        r"\bsinair\b", r"\bsinairr?\b", r"\bzinair\b", r"\bsi\s*nair\b",
+        r"\bsinar\b", r"\bsin ar\b", r"\bsineir\b", r"\bzin air\b"
     ]
     canon = nt
-    for pat in variants:
+    for pat in variants_esoxx:
         canon = re.sub(pat, "esoxx-one", canon)
+    for pat in variants_sinair:
+        canon = re.sub(pat, "sinair", canon)
     return canon
+
+def detect_product(raw_text: str) -> str:
+    """
+    Devuelve 'ESOXX-ONE', 'SINAIR' o 'Producto' según lo que aparezca en el transcript.
+    """
+    t = canonicalize_products(normalize(raw_text))
+    if "sinair" in t:
+        return "SINAIR"
+    if "esoxx-one" in t:
+        return "ESOXX-ONE"
+    return "Producto"
 
 def fuzzy_contains(haystack: str, needle: str, threshold: float = 0.82) -> bool:
     if not needle:
@@ -140,7 +160,6 @@ DAVINCI_POINTS = {
     "persuasion": {
         2: [
             "que caracteristicas considera ideales", "objetivos de tratamiento",
-        #   "combinado con ibp",              # se cubre abajo también
             "sinergia con inhibidores de la bomba de protones",
             "mecanismo", "beneficio", "evidencia", "estudio",
             "tres componentes", "acido hialuronico", "condroitin", "poloxamero",
@@ -267,7 +286,6 @@ def interaction_quality(t: str) -> Dict[str, object]:
     objections = any(fuzzy_contains(nt, k, 0.82) for k in ["objecion", "preocupacion", "duda", "reserva"])
     listen_hits = count_fuzzy_any(nt, LISTEN_KW, 0.82)
     listen_level = "Alta" if listen_hits >= 4 else "Moderada" if listen_hits >= 2 else "Baja"
-    # Señal simple de pasos (para compatibilidad con admin summaries)
     PHRASE_MAP = {
         "preparacion": ["objetivo de la visita", "propósito", "mensaje clave", "smart"],
         "apertura": ["buenos dias", "pacientes", "necesidades", "que le preocupa"],
@@ -349,8 +367,9 @@ def safe_div(a: float, b: float) -> float:
 
 # ─────────── OpenAI (opcional) ───────────
 def gpt_semantic_feedback(user_text: str) -> Optional[dict]:
-    """Devuelve un dict con evaluación por fases (0–5) y comentarios.
-       Si no hay OpenAI o falla, devuelve None.
+    """
+    Devuelve un dict con evaluación por fases (0–5) y comentarios.
+    Si no hay OpenAI o falla, devuelve None.
     """
     if not client:
         return None
@@ -380,7 +399,6 @@ Texto:
             max_tokens=600,
         )
         content = resp.choices[0].message.content.strip()
-        # Extrae JSON
         data = json.loads(content)
         return data
     except Exception as e:
@@ -394,7 +412,7 @@ def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str
 
     # 2) Reglas
     weighted    = score_weighted_phrases(user_text)
-    davinci_pts = score_davinci_points(user_text)  # total típico ~0–8 aprox (según tus reglas)
+    davinci_pts = score_davinci_points(user_text)  # total típico ~0–8 aprox
     legacy_8    = kw_score(user_text)              # 0–8
     iq          = interaction_quality(user_text)
     prod_detail, prod_total = product_compliance(user_text)
@@ -403,49 +421,40 @@ def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str
     gpt_fb = gpt_semantic_feedback(user_text)
 
     # 4) Normalizaciones (0–100)
-    #   - Modelo de ventas:
-    #       a) Reglas DaVinci total normalizado a 0–100 (techo 8)
+    # Modelo de ventas
     dv_norm_rules = min(davinci_pts.get("total", 0), 8) / 8.0 * 100.0
-    #       b) Si hay GPT, usa promedio de scores (0–5) → 0–100
     if gpt_fb and "Modelo_DaVinci" in gpt_fb:
         md = gpt_fb["Modelo_DaVinci"]
-        scores = [safe_div(md.get(k, {}).get("score", 0), 5) * 100.0 for k in ["preparacion","apertura","persuasion","cierre","analisis_post"]]
+        scores = [safe_div(md.get(k, {}).get("score", 0), 5) * 100.0 for k in
+                  ["preparacion","apertura","persuasion","cierre","analisis_post"]]
         dv_norm_gpt = sum(scores) / max(1, len(scores))
         modelo_ventas_pct = 0.7 * dv_norm_gpt + 0.3 * dv_norm_rules
     else:
         modelo_ventas_pct = dv_norm_rules
 
-    #   - Conocimiento producto: mezcla legacy y weighted/product rubric
+    # Conocimiento de producto
     legacy_pct = (legacy_8 / 8.0) * 100.0
-    # product rubric total máx: suma de weights
     max_prod = sum(int(cfg["weight"]) for cfg in PRODUCT_RUBRIC.values())
     prod_pct = safe_div(prod_total, max_prod) * 100.0
-    # weighted_kws: no tiene techo natural; hacemos un cap razonable 24 puntos = 100%
-    weighted_cap = min(int(weighted["total_points"]), 24)
+    weighted_cap = min(int(weighted["total_points"]), 24)  # cap razonable
     weighted_pct = (weighted_cap / 24.0) * 100.0
     conocimiento_pct = 0.5 * legacy_pct + 0.3 * prod_pct + 0.2 * weighted_pct
 
-    #   - Interacción (escucha, preguntas, cierre)
+    # Interacción
     listen_map = {"Baja": 30, "Moderada": 65, "Alta": 90}
     listen_pct = listen_map.get(iq.get("active_listening_level","Baja"), 30)
     closing_pct = 85 if iq.get("closing_present") else 40
-    question_rate = iq.get("question_rate", 0.0)  # % de tokens con "?"
-    # si pregunta entre 0.8% y 3% de los tokens → óptimo; fuera penaliza
-    if question_rate <= 0.2:
-        qrate_pct = 40
-    elif question_rate <= 0.8:
-        qrate_pct = 70
-    elif question_rate <= 3.0:
-        qrate_pct = 90
-    else:
-        qrate_pct = 60
+    question_rate = iq.get("question_rate", 0.0)
+    if question_rate <= 0.2: qrate_pct = 40
+    elif question_rate <= 0.8: qrate_pct = 70
+    elif question_rate <= 3.0: qrate_pct = 90
+    else: qrate_pct = 60
     interaccion_pct = round(0.5 * listen_pct + 0.3 * closing_pct + 0.2 * qrate_pct, 1)
 
-    #   - Visual
+    # Visual
     if vis_ratio is None:
-        visual_pct = 50  # desconocido → neutro
+        visual_pct = 50  # neutro
     else:
-        # lineal: 0.0 → 20 ; 0.7 → 95 ; >0.9 clamp 100
         base = 20 + (max(0.0, min(1.0, vis_ratio)) * 100)
         visual_pct = max(20, min(100, base if vis_ratio <= 0.9 else 100))
 
@@ -457,8 +466,7 @@ def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str
     red_flag = disq_flag(user_text)
 
     # 7) Resumen narrativo + Tips
-    fortalezas = []
-    debilidades = []
+    fortalezas, debilidades = [], []
     if modelo_ventas_pct >= 70: fortalezas.append("Aplicación sólida del modelo de ventas (flujo ordenado).")
     else: debilidades.append("Estructura de la visita mejorable (preparación/apertura/cierre incompletos).")
 
@@ -484,18 +492,19 @@ def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str
 
     # Tip breve y accionable
     if debilidades:
-        tip = debilidades[0].replace("Áreas de mejora: ", "")
+        tip = debilidades[0]
     else:
         tip = "Mantén el enfoque: cierra con un siguiente paso claro y medible."
 
-    # 8) Bloque público breve (lo sobreescribe el worker en DB)
-    public = f"Desempeño {level_lbl}. Recomendación: {tip}"
+    # 8) Bloque público breve y contextual (producto detectado)
+    product_label = detect_product(user_text)
+    public = f"{product_label}: desempeño {level_lbl} ({composite}/100). Recomendación: {tip}"
 
     # 9) Empaque de métricas para admin (compatibles con tu UI)
     internal: Dict[str, Any] = {
         "overall_training_summary": overall_training_summary,
         "gpt_detailed_feedback": None,  # se llena si hay GPT
-        "da_vinci_points": davinci_pts,  # reglas
+        "da_vinci_points": davinci_pts,
         "knowledge_score_legacy": f"{legacy_8}/8",
         "knowledge_score_legacy_num": legacy_8,
         "knowledge_weighted_total_points": weighted["total_points"],
@@ -510,13 +519,12 @@ def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str
         "visual_percentage": vis_pct,
         "disqualifying_phrases_detected": red_flag,
         "kpis": {
-            # KPIs compuestos útiles para ranking
             "modelo_ventas_pct": round(modelo_ventas_pct, 1),
             "conocimiento_pct": round(conocimiento_pct, 1),
             "interaccion_pct": round(interaccion_pct, 1),
             "visual_pct": round(visual_pct, 1),
-            "avg_score": composite,              # <- usado en tu admin
-            "avg_phase_score_1_3": round((legacy_pct + prod_pct + weighted_pct) / 3.0, 1),
+            "avg_score": composite,              # <- ranking
+            "avg_phase_score_1_3": round(( (legacy_pct) + (prod_pct) + (weighted_pct) ) / 3.0, 1),
             "avg_steps_pct": round(safe_div(
                 int(iq["da_vinci_step_flags"]["steps_applied_count"].split("/")[0]), 5
             ) * 100.0, 1),
@@ -525,7 +533,6 @@ def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str
     }
 
     if gpt_fb:
-        # Ensamblar bloques que tu template espera
         md = gpt_fb.get("Modelo_DaVinci", {})
         internal["gpt_detailed_feedback"] = {
             "Modelo_DaVinci": {
@@ -538,10 +545,8 @@ def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str
             "Areas_de_mejora": gpt_fb.get("Areas_de_mejora", []),
             "overall_evaluation": gpt_fb.get("overall_evaluation", "")
         }
-        # Siguientes pasos para lista en admin (si lo usas)
         internal["follow_up_suggestions"] = gpt_fb.get("Siguientes_pasos", [])
 
-    # 10) Nivel para retorno
     level = level_lbl.lower()
 
     return {
@@ -564,12 +569,11 @@ def evaluate_and_persist(session_id: int, user_text: str, leo_text: str, video_p
     tip = "Consejo pendiente."
     visual_feedback = internal.get("visual_presence", "")
 
-    # Tip breve (si existe recomendación más concreta)
+    # Tip breve (si existe recomendación de follow_up)
     if internal.get("follow_up_suggestions"):
         tip = str(internal["follow_up_suggestions"][0])[:240]
     else:
-        # Usa el tip generado arriba (derivado de áreas de mejora)
-        tip = public.replace("Desempeño", "").strip()
+        tip = public.replace("Recomendación:", "").strip()
         if len(tip) > 240:
             tip = tip[:240]
 
