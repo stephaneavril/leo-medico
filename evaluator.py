@@ -61,6 +61,8 @@ def normalize(txt: str) -> str:
     t = unicodedata.normalize("NFD", txt)
     t = t.encode("ascii", "ignore").decode()
     t = t.lower()
+    # quitar puntuación para que "hola, doctora" = "hola doctora"
+    t = re.sub(r"[^a-z0-9\s]", " ", t)
     t = re.sub(r"\s+", " ", t).strip()
     return t
 
@@ -251,6 +253,15 @@ def score_davinci_points(t: str) -> Dict[str, int]:
             for p in plist:
                 if fuzzy_contains(nt, p, FUZZY_PHASE_THR):
                     s += int(pts)
+
+        # ➕ BONUS específico para APERTURA: "hola ... doctor(a)" con 0-3 palabras entre medio
+        if stage == "apertura":
+            if re.search(r"\bhola\b(?:\s+\w+){0,3}\s+\bdoctor(?:a)?\b", nt):
+                s += 2
+            # (opcional) saludo genérico suma 1
+            if re.search(r"\b(buen[oa]s?\s+dias?|buen[oa]s?\s+tardes?|hola)\b", nt):
+                s += 1
+
         out[stage] = s
     out["total"] = sum(out.values())
     return out

@@ -9,7 +9,6 @@ from typing import Optional, Dict, Any, Tuple
 import boto3
 from botocore.exceptions import ClientError
 import psycopg2
-from psycopg2.extras import Json
 
 from celery import Celery
 from dotenv import load_dotenv
@@ -32,10 +31,21 @@ PG_USER = os.getenv("PG_USER", "postgres")
 PG_PWD  = os.getenv("PG_PWD", "")
 PG_PORT = int(os.getenv("PG_PORT", "5432"))
 
-AWS_REGION             = os.getenv("AWS_REGION", "us-east-1")
-AWS_S3_BUCKET_NAME          = os.getenv("AWS_S3_BUCKET_NAME", "")
-AWS_TRANSCRIBE_LANG    = os.getenv("AWS_TRANSCRIBE_LANG", "es-MX")
+AWS_REGION          = os.getenv("AWS_REGION", "us-east-1")
+AWS_S3_BUCKET_NAME  = os.getenv("AWS_S3_BUCKET_NAME", "")
+AWS_TRANSCRIBE_LANG = os.getenv("AWS_TRANSCRIBE_LANG", "es-US")
 AWS_TRANSCRIBE_ENABLED = os.getenv("AWS_TRANSCRIBE_ENABLED", "1") == "1"
+
+# Normaliza el idioma a uno válido para Transcribe (evita BadRequest es-MX)
+_lang_map = {
+    "es-mx": "es-US",
+    "es_mx": "es-US",
+    "es":    "es-US",
+    "es-us": "es-US",
+    "es_es": "es-ES",
+}
+_lc = (AWS_TRANSCRIBE_LANG or "").lower().strip()
+AWS_TRANSCRIBE_LANG = _lang_map.get(_lc, AWS_TRANSCRIBE_LANG)
 
 FFMPEG_BIN = os.getenv("FFMPEG_BIN", "ffmpeg")  # Debe estar en PATH
 AUDIO_RATE = 16000
@@ -104,10 +114,8 @@ def extract_wav_16k(src_video: str) -> Tuple[str, Optional[int]]:
 # ───────────────────────────── Transcribe AWS ────────────────────────────
 def transcribe_aws_localfile(wav_path: str) -> str:
     """
-    Implementación mínima: para casos productivos se sugiere usar
-    Amazon Transcribe Medical o batch con S3 pre-signed URL.
-    Aquí, por simplicidad, intentamos Transcribe con upload a S3 + StartTranscriptionJob.
-    Si no se logra, devolvemos cadena vacía (fallback tomará el transcript del front).
+    Minimal viable: sube a S3 y usa StartTranscriptionJob.
+    Si no se logra, devuelve "" (el caller hará fallback al transcript del front).
     """
     if not AWS_TRANSCRIBE_ENABLED:
         return ""
@@ -195,22 +203,23 @@ def process_session_transcript(payload: Dict[str, Any]) -> Dict[str, Any]:
     payload esperado (mínimo):
     {
       "session_id": 123,
-      "s3_key": "uploads/abc123.webm",       # o "s3_url"
-      "user_transcript": [... o str],        # opcional (del front)
-      "leo_text": "",                        # opcional (transcript avatar)
-      "duration_seconds": 0                  # opcional estimado del front
+      "s3_key" | "video_object_key" | "object_key": "uploads/abc123.webm",
+      "user_transcript": [... o str],   # opcional (del front)
+      "leo_text": "",                   # opcional (transcript avatar)
+      "duration_seconds" | "duration": 0
     }
     """
-    logger.info(f"[TASK] payload keys: {list(payload.keys())}")
+    logger.info(f"🟢 START payload={payload}")
     sid = payload.get("session_id")
     if not sid:
         raise ValueError("Falta 'session_id' en payload.")
 
-    s3_key = payload.get("s3_key")
+    # Acepta alias para el key del objeto en S3
+    s3_key = payload.get("s3_key") or payload.get("video_object_key") or payload.get("object_key")
     s3_url = payload.get("s3_url")
     user_transcript_front = payload.get("user_transcript")
     leo_text = payload.get("leo_text") or ""
-    dur_front = int(payload.get("duration_seconds") or 0)
+    dur_front = int(payload.get("duration_seconds") or payload.get("duration") or 0)
 
     # 1) Obtener archivo local (priorizar s3_key)
     local_video = None
@@ -219,7 +228,7 @@ def process_session_transcript(payload: Dict[str, Any]) -> Dict[str, Any]:
             local_video = s3_download_to_tmp(s3_key)
         elif s3_url:
             # Descargar por URL (presigned)
-            import requests, tempfile
+            import requests
             fd, p = tempfile.mkstemp(prefix="leo_", suffix=".webm")
             os.close(fd)
             r = requests.get(s3_url, timeout=60)
@@ -228,7 +237,7 @@ def process_session_transcript(payload: Dict[str, Any]) -> Dict[str, Any]:
                 f.write(r.content)
             local_video = p
         else:
-            raise ValueError("Falta s3_key o s3_url en payload.")
+            raise ValueError("Falta s3_key/video_object_key/object_key o s3_url en payload.")
     except Exception as e:
         logger.error(f"Error obteniendo video: {e}")
         local_video = None
@@ -274,6 +283,7 @@ def process_session_transcript(payload: Dict[str, Any]) -> Dict[str, Any]:
             conn.commit()
         finally:
             conn.close()
+        logger.info(f"🔴 DONE sid={sid} reason=no_transcript")
         return {"ok": False, "reason": "no_transcript", "session_id": sid}
 
     res = evaluate_and_persist(str(sid), user_txt, leo_text, local_video or "")
@@ -290,5 +300,5 @@ def process_session_transcript(payload: Dict[str, Any]) -> Dict[str, Any]:
     finally:
         conn.close()
 
-    logger.info(f"[EVAL OK] sid={sid}")
+    logger.info(f"✅ DONE sid={sid} level={res.get('level', 'alto')}")
     return {"ok": True, "session_id": sid, "level": res.get("level", "alto")}
