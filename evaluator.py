@@ -1,17 +1,14 @@
 # evaluator.py
 # -------------------------------------------------------------------
 # Analiza una simulación Representante ↔ Médico (texto + video opc.)
-# GUARDA SIEMPRE métricas en la BD (interactions.evaluation_rh) cuando
-# se llama vía evaluate_and_persist(). También devuelve un bloque público.
-#
-# Retorna:
-#   { "public": str, "internal": dict, "level": "alto" | "error" }
+# Guarda SIEMPRE métricas en BD cuando se llama vía evaluate_and_persist().
+# Retorna: {"public": str, "internal": dict, "level": "alto"|"error"}
 # -------------------------------------------------------------------
 import os, json, textwrap, unicodedata, re, difflib
 from typing import Optional, Dict, List, Tuple
 from urllib.parse import urlparse
 
-# OpenCV (opcional) para un vistazo de presencia en video
+# OpenCV opcional (presencia en video)
 try:
     import cv2
 except ImportError:
@@ -24,9 +21,7 @@ from dotenv import load_dotenv
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY", ""))
 
-# ────────────────────────────────────────────────────────────────────
-# Utils
-# ────────────────────────────────────────────────────────────────────
+# ───────────────────────── Utils ─────────────────────────
 
 def normalize(txt: str) -> str:
     if not txt:
@@ -38,10 +33,7 @@ def normalize(txt: str) -> str:
     return t
 
 def canonicalize_products(nt: str) -> str:
-    """
-    Normaliza variantes/errores del ASR hacia 'esoxx-one'
-    (aysoks/eso xx/esof/esok/esoxxone/esox one/soft one, etc.)
-    """
+    """Normaliza variantes del producto a 'esoxx-one' (tolerante a ASR)."""
     variants = [
         r"\beso\s*xx\s*one\b", r"\besox+\s*one\b", r"\besoxx-one\b",
         r"\besof+\s*one\b", r"\becox+\s*one\b", r"\besox+\b", r"\besof+\b",
@@ -69,11 +61,8 @@ def fuzzy_contains(haystack: str, needle: str, threshold: float = 0.82) -> bool:
 def count_fuzzy_any(nt: str, phrases: List[str], thr: float = 0.82) -> int:
     return sum(1 for p in phrases if fuzzy_contains(nt, p, thr))
 
-# ────────────────────────────────────────────────────────────────────
-# Scoring config
-# ────────────────────────────────────────────────────────────────────
+# ─────────── Scoring config (claims + Da Vinci) ───────────
 
-# Mensajes clínicos/diferenciales ponderados
 WEIGHTED_KWS = {
     "3pt": [
         "esoxx-one mejora hasta 90% todos los sintomas de la erge",
@@ -112,58 +101,78 @@ WEIGHTED_KWS = {
     ],
 }
 
-# Modelo Da Vinci – detector de puntos por fase
+# Ampliado con frases que aparecen en tus demos (más flexibles)
 DAVINCI_POINTS = {
-    "preparacion": {2: ["objetivo smart", "mi objetivo hoy es"],
-                    1: ["objetivo de la visita", "mensaje clave", "materiales"]},
-    "apertura":    {2: ["cuales son las mayores preocupaciones que tiene en sus pacientes con erge",
-                        "que caracteristicas tienen sus pacientes con reflujo gastroesofagico",
-                        "dando seguimiento a mi visita anterior",
-                        "me gustaria conocer que es lo que mas le preocupa"],
-                    1: ["buenos dias", "mi nombre es", "como ha estado"]},
-    "persuasion":  {2: ["que caracteristicas considera ideales en un producto para tratar la erge",
-                        "que es lo que busca cuando selecciona un producto",
-                        "cuales son los objetivos de tratamiento para tratar un paciente con reflujo gastroesofagico",
-                        "en comparacion con los antiacidos",
-                        "combinado con ibp"]},
-    "cierre":      {2: ["con base a lo dialogado considera que esoxx-one pueden ser la mejor opcion de tratamiento",
-                        "que otras caracteristicas necesita para considerar a esoxx-one como primera opcion",
-                        "grupo de pacientes", "beneficie a sus pacientes"],
-                    1: ["puedo contar con", "podemos acordar", "siguiente paso"]},
-    "analisis_post": {2: ["auto-evaluacion", "plan para proxima visita"],
-                      1: ["objeciones", "proxima visita", "actualiza"]},
+    "preparacion": {
+        2: ["objetivo smart", "mi objetivo hoy es", "metas smart"],
+        1: [
+            "objetivo de la visita", "propósito de la visita", "mensaje clave",
+            "hoy quiero", "plan para hoy", "materiales", "presentacion preparada"
+        ],
+    },
+    "apertura": {
+        2: [
+            "cuales son las mayores preocupaciones", "principal preocupacion",
+            "que caracteristicas tienen sus pacientes", "visita anterior",
+            "me gustaria conocer", "que es lo que mas le preocupa"
+        ],
+        1: [
+            "buenos dias", "buen dia", "hola doctora", "mi nombre es",
+            "como ha estado", "gracias por su tiempo"
+        ],
+    },
+    "persuasion": {
+        2: [
+            "que caracteristicas considera ideales", "objetivos de tratamiento",
+            "combinado con ibp", "sinergia con inhibidores de la bomba de protones",
+            "mecanismo", "beneficio", "evidencia", "estudio",
+            "tres componentes", "acido hialuronico", "condroitin", "poloxamero",
+        ]
+    },
+    "cierre": {
+        2: [
+            "con base a lo dialogado considera que esoxx-one", "podria empezar con algun paciente",
+            "le parece si iniciamos", "empezar a considerar algun paciente",
+            "podemos acordar un siguiente paso", "puedo contar con su apoyo",
+        ],
+        1: ["siguiente paso", "podemos acordar", "puedo contar con", "le parece si"],
+    },
+    "analisis_post": {
+        2: ["auto-evaluacion", "plan para proxima visita", "que mejoraria para la proxima"],
+        1: ["objeciones", "proxima visita", "actualiza", "que aprendi"],
+    },
 }
 
-KW_LIST   = ["beneficio", "estudio", "sintoma", "tratamiento", "reflujo", "mecanismo", "eficacia", "seguridad"]
+KW_LIST = ["beneficio", "estudio", "sintoma", "tratamiento", "reflujo", "mecanismo", "eficacia", "seguridad"]
 BAD_PHRASES = ["no se", "no tengo idea", "lo invento", "no lo estudie", "no estudie bien", "no conozco", "no me acuerdo"]
-LISTEN_KW  = ["entiendo", "comprendo", "veo que", "lo que dices", "si entiendo bien", "parafraseando",
-              "que le preocupa", "me gustaria conocer", "que caracteristicas tienen", "podria contarme", "como describe a sus pacientes"]
+LISTEN_KW  = [
+    "entiendo", "comprendo", "veo que", "lo que dices", "si entiendo bien", "parafraseando",
+    "que le preocupa", "me gustaria conocer", "que caracteristicas tienen", "podria contarme", "como describe a sus pacientes"
+]
 
-# Checklist explícito por categoría del producto (para capacitación)
+# Rúbrica de producto ampliada (más cercana a tu pitch real)
 PRODUCT_RUBRIC: Dict[str, Dict[str, List[str] | int]] = {
-    # cada categoría tiene "weight" (peso) y "phrases" (gatillos tolerantes vía fuzzy)
     "mecanismo": {
         "weight": 2,
         "phrases": [
-            "barrera bioadhesiva", "recubre el epitelio esofagico",
-            "actua como barrera mecanica", "poloxamero 407",
-            "acido hialuronico", "sulfato de condroitina",
+            "barrera bioadhesiva", "recubre el epitelio esofagico", "actua como barrera mecanica",
+            "poloxamero 407", "acido hialuronico", "sulfato de condroitina", "tres componentes",
+            "dispositivo medico", "sin interacciones con medicamentos", "actua en el esofago",
         ],
     },
     "eficacia": {
         "weight": 3,
         "phrases": [
             "mejora hasta 90% todos los sintomas", "reduce hasta 90% la frecuencia y severidad",
-            "alivio en menor tiempo", "reduce la falla al tratamiento",
-            "reduce significativamente los sintomas",
+            "alivio en menor tiempo", "reduce la falla al tratamiento", "reduce significativamente los sintomas",
+            "sinergia con inhibidores de la bomba de protones", "ibp mas esoxx-one",
         ],
     },
     "evidencia": {
         "weight": 2,
         "phrases": [
-            "demostrado en ninos y adolescentes", "estudio", "evidencia",
-            "mejoria significativa", "reduccion del uso de antiacidos",
-            "epitelizacion esofagica",
+            "demostrado en ninos y adolescentes", "estudio", "evidencia", "mejoria significativa",
+            "reduccion del uso de antiacidos", "epitelizacion esofagica",
         ],
     },
     "uso_posologia": {
@@ -171,24 +180,21 @@ PRODUCT_RUBRIC: Dict[str, Dict[str, List[str] | int]] = {
         "phrases": [
             "un sobre despues de cada comida y antes de dormir",
             "esperar por lo menos 30min", "esperar 60min", "esperar 1hr",
+            "liquido a temperatura ambiente y en estado gel a temperatura corporal",
+            "formar un gel en el esofago",
         ],
     },
     "diferenciales": {
         "weight": 1,
         "phrases": [
-            "combinacion de 3 activos", "mecanismo de proteccion original",
-            "unico", "mejora la calidad de vida",
+            "combinacion de 3 activos", "mecanismo de proteccion original", "unico",
+            "mejora la calidad de vida", "sin eventos adversos", "no se absorbe sistemicamente",
         ],
     },
-    "mensajes_base": {
-        "weight": 1,
-        "phrases": ["esoxx-one", "reflujo", "erge", "sintomas"],
-    },
+    "mensajes_base": {"weight": 1, "phrases": ["esoxx-one", "reflujo", "erge", "sintomas"]},
 }
 
-# ────────────────────────────────────────────────────────────────────
-# Scorers
-# ────────────────────────────────────────────────────────────────────
+# ─────────── Scorers ───────────
 
 def score_weighted_phrases(t: str) -> Dict[str, object]:
     nt = canonicalize_products(normalize(t))
@@ -203,12 +209,13 @@ def score_weighted_phrases(t: str) -> Dict[str, object]:
 
 def score_davinci_points(t: str) -> Dict[str, int]:
     nt = canonicalize_products(normalize(t))
-    out = {}
+    out: Dict[str, int] = {}
     for stage, rules in DAVINCI_POINTS.items():
         s = 0
         for pts, plist in rules.items():
             for p in plist:
-                if fuzzy_contains(nt, p, 0.80):
+                # umbral un poco más permisivo para fases
+                if fuzzy_contains(nt, p, 0.79):
                     s += int(pts)
         out[stage] = s
     out["total"] = sum(out.values())
@@ -223,11 +230,6 @@ def disq_flag(t: str) -> bool:
     return any(fuzzy_contains(nt, w, 0.88) for w in BAD_PHRASES)
 
 def product_compliance(t: str) -> Tuple[Dict[str, dict], int]:
-    """
-    Devuelve (detalle_por_categoria, score_total).
-    Cada categoría suma: weight * (#frases_detectadas > 0 ? 1 : 0)
-    y además lista exactamente qué frases se detectaron.
-    """
     nt = canonicalize_products(normalize(t))
     detail: Dict[str, dict] = {}
     total = 0
@@ -244,8 +246,10 @@ def interaction_quality(t: str) -> Dict[str, object]:
     tokens = nt.split()
     length = len(tokens)
     qmarks = t.count("?")
-    question_rate = round(qmarks / max(1, length) * 100, 2)  # % preguntas por palabra
-    closing = any(fuzzy_contains(nt, k, 0.82) for k in ["siguiente paso", "podemos acordar", "puedo contar con"])
+    question_rate = round(qmarks / max(1, length) * 100, 2)
+    closing = any(fuzzy_contains(nt, k, 0.80) for k in [
+        "siguiente paso", "podemos acordar", "puedo contar con", "le parece si", "empezar a considerar"
+    ])
     objections = any(fuzzy_contains(nt, k, 0.82) for k in ["objecion", "preocupacion", "duda", "reserva"])
     listen_hits = count_fuzzy_any(nt, LISTEN_KW, 0.82)
     listen_level = "Alta" if listen_hits >= 4 else "Moderada" if listen_hits >= 2 else "Baja"
@@ -257,9 +261,8 @@ def interaction_quality(t: str) -> Dict[str, object]:
         "active_listening_level": listen_level,
     }
 
-# ────────────────────────────────────────────────────────────────────
-# Visual express
-# ────────────────────────────────────────────────────────────────────
+# ─────────── Visual express ───────────
+
 def visual_analysis(path: str):
     MAX_FRAMES = int(os.getenv("MAX_FRAMES_TO_CHECK", 60))
     try:
@@ -290,9 +293,8 @@ def visual_analysis(path: str):
     except Exception as e:
         return f"⚠️ Error visual: {e}", "Error video", "N/A"
 
-# ────────────────────────────────────────────────────────────────────
-# BD
-# ────────────────────────────────────────────────────────────────────
+# ─────────── BD ───────────
+
 def get_db_connection():
     database_url = os.getenv("DATABASE_URL")
     if not database_url:
@@ -303,9 +305,25 @@ def get_db_connection():
         host=parsed.hostname, port=parsed.port, sslmode="require",
     )
 
-# ────────────────────────────────────────────────────────────────────
-# Core evaluator
-# ────────────────────────────────────────────────────────────────────
+# ─────────── Evaluador principal ───────────
+
+def _validate_internal(internal: dict, user_text: str) -> dict:
+    """Blinda el JSON interno para el admin (si algo falló)."""
+    internal = internal or {}
+    internal.setdefault("da_vinci_points", score_davinci_points(user_text))
+    internal.setdefault("knowledge_score_legacy", f"{kw_score(user_text)}/8")
+    internal.setdefault("knowledge_score_legacy_num", kw_score(user_text))
+    internal.setdefault("product_claims", {"detail": {}, "product_score_total": 0})
+    internal.setdefault("interaction_quality", {})
+    if "kpis" not in internal:
+        internal["kpis"] = {
+            "avg_score": 0.0,
+            "avg_phase_score_1_3": 1.0,
+            "avg_steps_pct": 0.0,
+            "legacy_count": kw_score(user_text),
+        }
+    return internal
+
 def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str] = None) -> Dict[str, object]:
     # Visual
     vis_pub, vis_int, vis_pct = (
@@ -314,17 +332,17 @@ def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str
         else ("⚠️ Sin video disponible.", "No evaluado", "N/A")
     )
 
-    # Señales de fases y % aplicado
+    # Señales Da Vinci (% aplicado)
     PHRASE_MAP = {
-        "preparacion":   ["objetivo de la visita","materiales","mensaje clave","smart","objetivo smart","mi objetivo hoy es"],
-        "apertura":      ["buenos dias","como ha estado","pacientes","necesidades","visita anterior","que le preocupa","que caracteristicas tienen"],
-        "persuasion":    ["objetivos de tratamiento","beneficio","mecanismo","estudio","evidencia","caracteristicas del producto","combinado con ibp"],
-        "cierre":        ["siguiente paso","podemos acordar","cuento con usted","promocion","farmacias","puedo contar con"],
-        "analisis_post": ["auto-evaluacion","objeciones","proxima visita","actualiza"],
+        "preparacion": ["objetivo de la visita", "propósito de la visita", "mensaje clave", "smart", "objetivo smart", "mi objetivo hoy es", "plan para hoy", "materiales"],
+        "apertura": ["buenos dias", "buen dia", "hola doctora", "como ha estado", "pacientes", "necesidades", "visita anterior", "principal preocupacion", "que le preocupa", "que caracteristicas tienen"],
+        "persuasion": ["objetivos de tratamiento", "beneficio", "mecanismo", "estudio", "evidencia", "caracteristicas del producto", "combinado con ibp", "inhibidores de la bomba de protones"],
+        "cierre": ["siguiente paso", "podemos acordar", "cuento con usted", "puedo contar con", "le parece si", "empezar a considerar"],
+        "analisis_post": ["auto-evaluacion", "objeciones", "proxima visita", "actualiza", "que aprendi"],
     }
     def step_flag(step_kw: List[str]) -> bool:
         nt = canonicalize_products(normalize(user_text))
-        return any(fuzzy_contains(nt, p, 0.82) for p in step_kw)
+        return any(fuzzy_contains(nt, p, 0.80) for p in step_kw)
 
     sales_model_flags = {step: step_flag(kws) for step, kws in PHRASE_MAP.items()}
     steps_applied_count = sum(sales_model_flags.values())
@@ -335,22 +353,22 @@ def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str
     davinci_pts = score_davinci_points(user_text)
     legacy_8   = kw_score(user_text)
 
-    # Calidad de interacción + cumplimiento de producto
+    # Calidad + producto
     iq = interaction_quality(user_text)
     prod_detail, prod_total = product_compliance(user_text)
 
-    # Reglas suaves para “poco diálogo”
+    # Señal de bajo diálogo
     nt = normalize(user_text)
     min_tokens = 25
     min_signals = (iq["question_rate"] > 0.15) or (steps_applied_count >= 2)
     low_dialogue_note = (len(nt.split()) < min_tokens) or not min_signals
 
-    # GPT (resumen + valoración de fases)
+    # GPT (resumen + valoración cualitativa)
     try:
         SYSTEM_PROMPT = textwrap.dedent("""
         Actúa como coach-evaluador senior de la industria farmacéutica (Alfasigma).
-        El representante presenta el producto ESOXX ONE (puede aparecer como 'esoxx-one' por normalización).
-        Evalúa desempeño por fases del Modelo Da Vinci y la calidad de la presentación
+        El representante presenta ESOXX ONE (puede aparecer como 'esoxx-one' por normalización).
+        Evalúa por fases del Modelo Da Vinci y la calidad de la presentación
         (claridad, foco clínico, evidencia, posología, manejo de dudas), SOLO con el texto dado.
         Responde en JSON EXACTO con el FORMATO.
         """)
@@ -385,7 +403,6 @@ def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str
         gpt_internal = gpt_json.get("internal_analysis", {})
         level = "alto"
     except Exception:
-        # Fallback diplomático
         gpt_public = ("Buen esfuerzo. Refuerza la estructura Da Vinci, usa evidencia clínica concreta de ESOXX ONE "
                       "y cierra con un siguiente paso claro; practica manejo de objeciones.")
         gpt_internal = {
@@ -400,7 +417,7 @@ def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str
         }
         level = "error"
 
-    # Map cualitativo → numérico para KPI promedio
+    # KPI promedio (1–3 a 0–10)
     MAP_Q2N = {"Excelente": 3, "Bien": 2, "Necesita Mejora": 1}
     md = gpt_internal.get("Modelo_DaVinci", {}) or {}
     md_scores = [
@@ -430,11 +447,7 @@ def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str
         },
         "da_vinci_points": davinci_pts,
 
-        # NUEVO: Cumplimiento producto y calidad de interacción
-        "product_claims": {
-            "detail": prod_detail,
-            "product_score_total": prod_total,    # referencia rápida para dashboards
-        },
+        "product_claims": {"detail": prod_detail, "product_score_total": prod_total},
         "interaction_quality": iq,
 
         "active_listening_simple_detection": iq["active_listening_level"],
@@ -446,14 +459,14 @@ def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str
         },
 
         "kpis": {
-            "avg_score": avg_score_0_10,              # 0–10
+            "avg_score": avg_score_0_10,
             "avg_phase_score_1_3": avg_phase_score_1_3,
-            "avg_steps_pct": steps_applied_pct,       # 0–100
-            "legacy_count": legacy_8,                 # 0–8
+            "avg_steps_pct": steps_applied_pct,
+            "legacy_count": legacy_8,
         }
     }
 
-    # Bloque público diplomático
+    # Público (diplomático)
     extra_line = "• Refuerza preguntas y estructura." if low_dialogue_note else "• Mantén la estructura y refuerza evidencias."
     public_block = textwrap.dedent(f"""
         {gpt_public}
@@ -466,33 +479,25 @@ def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str
         {extra_line}
     """).strip()
 
+    # Blindaje de esquema
+    internal_summary = _validate_internal(internal_summary, user_text)
+
     return {"public": public_block, "internal": internal_summary, "level": level}
 
-# ────────────────────────────────────────────────────────────────────
-# Persistencia en BD
-# ────────────────────────────────────────────────────────────────────
+# ─────────── Persistencia ───────────
+
 def evaluate_and_persist(session_id: int, user_text: str, leo_text: str, video_path: Optional[str] = None) -> Dict[str, object]:
     result = evaluate_interaction(user_text, leo_text, video_path)
-
-    internal = result.get("internal") or {}
-    # Refuerzos por si GPT falla o el texto es muy pobre
-    internal.setdefault("da_vinci_points", score_davinci_points(user_text))
-    internal.setdefault("knowledge_score_legacy", f"{kw_score(user_text)}/8")
-    internal.setdefault("knowledge_score_legacy_num", kw_score(user_text))
-    if "kpis" not in internal:
-        internal["kpis"] = {
-            "avg_score": 0.0,
-            "avg_phase_score_1_3": 1.0,
-            "avg_steps_pct": 0.0,
-            "legacy_count": kw_score(user_text),
-        }
+    internal = _validate_internal(result.get("internal"), user_text)
 
     conn = None
     try:
         conn = get_db_connection()
         with conn.cursor() as cur:
-            cur.execute("UPDATE interactions SET evaluation_rh = %s WHERE id = %s",
-                        (json.dumps(internal), int(session_id)))
+            cur.execute(
+                "UPDATE interactions SET evaluation_rh = %s WHERE id = %s",
+                (json.dumps(internal), int(session_id))
+            )
         conn.commit()
     except Exception:
         result["level"] = "error"
