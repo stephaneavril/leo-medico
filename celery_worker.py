@@ -1,304 +1,255 @@
-# === celery_worker.py — Descarga, transcribe (AWS) con fallback, evalúa y persiste ===
+# === celery_worker.py — Transcript-only + Persistencia vía evaluator ===
+"""
+Flujo:
+1) Descarga .webm de S3.
+2) Extrae audio a .wav mono 16 kHz.
+3) Transcribe con AWS Transcribe (idioma configurable).
+4) Llama a evaluate_and_persist(session_id, user_text, "", None)
+   -> GUARDA evaluation_rh con Da Vinci, KPIs, etc.
+5) Actualiza SOLO 'evaluation' (bloque público), 'duration_seconds',
+   'audio_path' (key del video) y 'timestamp'. NO pisa evaluation_rh.
+"""
+
 from __future__ import annotations
-
-import os, json, time, logging, subprocess, tempfile
+import os, json, time, secrets, logging, subprocess, requests
 from datetime import datetime
-from pathlib import Path
-from typing import Optional, Dict, Any, Tuple
+from urllib.parse import urlparse
 
+from dotenv import load_dotenv
+from celery import Celery
 import boto3
 from botocore.exceptions import ClientError
 import psycopg2
 
-from celery import Celery
-from dotenv import load_dotenv
+from evaluator import evaluate_and_persist  # firma: (session_id, user_text, leo_text, video_path)
 
-from evaluator import evaluate_and_persist  # (session_id, user_text, leo_text, video_path)
-
-# ───────────────────────────────── CONFIG ─────────────────────────────────
+# ────────────────── CONFIG GENERAL ──────────────────
 load_dotenv()
 
-LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
-logging.basicConfig(level=LOG_LEVEL, format="%(asctime)s [%(levelname)s] %(message)s")
-logger = logging.getLogger("celery_worker")
+CELERY_SOFT_LIMIT = int(os.getenv("CELERY_SOFT_LIMIT", 600))   # 10 min
+CELERY_HARD_LIMIT = int(os.getenv("CELERY_HARD_LIMIT", 660))   # 11 min
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 celery_app = Celery("leo_tasks", broker=REDIS_URL, backend=REDIS_URL)
+celery_app.conf.broker_transport_options = {"visibility_timeout": 7200}
+celery_app.conf.update(
+    task_track_started=True,
+    task_acks_late=True,
+    worker_prefetch_multiplier=1,
+    worker_hijack_root_logger=False,
+    worker_log_format="%(asctime)s %(levelname)s %(message)s",
+)
+celery_app.conf.imports = ("celery_worker",)
 
-PG_HOST = os.getenv("PG_HOST", "localhost")
-PG_DB   = os.getenv("PG_DB", "postgres")
-PG_USER = os.getenv("PG_USER", "postgres")
-PG_PWD  = os.getenv("PG_PWD", "")
-PG_PORT = int(os.getenv("PG_PORT", "5432"))
+logging.basicConfig(level=logging.INFO, force=True)
 
-AWS_REGION          = os.getenv("AWS_REGION", "us-east-1")
-AWS_S3_BUCKET_NAME  = os.getenv("AWS_S3_BUCKET_NAME", "")
-AWS_TRANSCRIBE_LANG = os.getenv("AWS_TRANSCRIBE_LANG", "es-US")
-AWS_TRANSCRIBE_ENABLED = os.getenv("AWS_TRANSCRIBE_ENABLED", "1") == "1"
+TMP_DIR = os.getenv("TEMP_PROCESSING_FOLDER", "/tmp/leo_trainer_processing")
+os.makedirs(TMP_DIR, exist_ok=True)
 
-# Normaliza el idioma a uno válido para Transcribe (evita BadRequest es-MX)
-_lang_map = {
-    "es-mx": "es-US",
-    "es_mx": "es-US",
-    "es":    "es-US",
-    "es-us": "es-US",
-    "es_es": "es-ES",
-}
-_lc = (AWS_TRANSCRIBE_LANG or "").lower().strip()
-AWS_TRANSCRIBE_LANG = _lang_map.get(_lc, AWS_TRANSCRIBE_LANG)
+AWS_S3_BUCKET_NAME     = os.getenv("AWS_S3_BUCKET_NAME", "").split("#", 1)[0].strip().strip("'\"")
+AWS_S3_REGION_NAME     = os.getenv("AWS_S3_REGION_NAME", "us-east-1")
+AWS_ACCESS_KEY_ID      = os.getenv("AWS_ACCESS_KEY_ID")
+AWS_SECRET_ACCESS_KEY  = os.getenv("AWS_SECRET_ACCESS_KEY")
 
-FFMPEG_BIN = os.getenv("FFMPEG_BIN", "ffmpeg")  # Debe estar en PATH
-AUDIO_RATE = 16000
+s3 = boto3.client(
+    "s3",
+    aws_access_key_id=AWS_ACCESS_KEY_ID,
+    aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
+    region_name=AWS_S3_REGION_NAME,
+)
+transcribe = boto3.client(
+    "transcribe",
+    aws_access_key_id=AWS_ACCESS_KEY_ID,
+    aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
+    region_name=AWS_S3_REGION_NAME,
+)
 
-# ─────────────────────────────── DB UTILS ────────────────────────────────
-def get_conn():
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL env var not set")
+
+TRANSCRIBE_LANG = os.getenv("AWS_TRANSCRIBE_LANG", "es-MX")   # ajustable
+
+# ────────────────── HELPERS S3/FFMPEG/DB ──────────────────
+
+def dl_s3(bucket: str, key: str, dst: str) -> bool:
+    try:
+        s3.download_file(bucket, key, dst)
+        return True
+    except ClientError as e:
+        logging.error("[S3 DOWNLOAD] %s", e)
+        return False
+
+def up_s3(src: str, bucket: str, key: str) -> str | None:
+    try:
+        s3.upload_file(src, bucket, key)
+    except ClientError as e:
+        logging.error("[S3 UPLOAD] %s", e)
+        return None
+    return f"https://{bucket}.s3.{AWS_S3_REGION_NAME}.amazonaws.com/{key}"
+
+def run_ffmpeg_to_wav(src_webm: str, dst_wav: str) -> bool:
+    try:
+        subprocess.run(
+            ["ffmpeg", "-i", src_webm, "-vn", "-ar", "16000", "-ac", "1", "-y", dst_wav],
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, check=True
+        )
+        return True
+    except subprocess.CalledProcessError as e:
+        logging.error("[FFMPEG] %s", e.stderr.decode(errors="ignore"))
+        return False
+
+def db_conn():
+    p = urlparse(DATABASE_URL)
     return psycopg2.connect(
-        host=PG_HOST, port=PG_PORT, dbname=PG_DB, user=PG_USER, password=PG_PWD
+        database=p.path.lstrip("/"), user=p.username, password=p.password,
+        host=p.hostname, port=p.port, sslmode="require",
     )
 
-def init_db():
-    ddl = """
-    CREATE TABLE IF NOT EXISTS interactions (
-        id SERIAL PRIMARY KEY,
-        session_id TEXT,
-        timestamp TIMESTAMP DEFAULT NOW(),
-        audio_path TEXT,
-        evaluation TEXT,          -- bloque público mostrado al usuario
-        evaluation_rh TEXT,       -- JSON interno (da_vinci_points, KPIs, etc.)
-        duration_seconds INTEGER DEFAULT 0,
-        tip TEXT,
-        visual_feedback TEXT,
-        visible_to_user BOOLEAN DEFAULT FALSE,
-        avatar_transcript TEXT,
-        rh_comment TEXT
-    );
-    """
-    conn = get_conn()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(ddl)
-        conn.commit()
-    finally:
-        conn.close()
+def _update_db_only_public(sid: int, public_text: str, duration_seconds: int, video_key: str | None, timestamp_iso: str | None):
+    """NO toca evaluation_rh (ya la guardó evaluate_and_persist)."""
+    conn = db_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """UPDATE interactions SET
+               evaluation=%s,
+               duration_seconds=%s,
+               audio_path=%s,
+               timestamp=%s,
+               visible_to_user=FALSE
+           WHERE id=%s;""",
+        (public_text, duration_seconds, video_key, timestamp_iso, sid),
+    )
+    conn.commit()
+    conn.close()
 
-init_db()
-
-# ─────────────────────────────── S3 HELPERS ──────────────────────────────
-def s3_download_to_tmp(key: str, bucket: Optional[str] = None) -> str:
-    bucket = bucket or AWS_S3_BUCKET_NAME
-    if not bucket:
-        raise RuntimeError("AWS_S3_BUCKET_NAME no está configurado.")
-    s3 = boto3.client("s3", region_name=AWS_REGION)
-    fd, tmp_path = tempfile.mkstemp(prefix="leo_", suffix=Path(key).suffix or ".webm")
-    os.close(fd)
-    try:
-        s3.download_file(bucket, key, tmp_path)
-        logger.info(f"S3 descargado: s3://{bucket}/{key} -> {tmp_path}")
-        return tmp_path
-    except ClientError as e:
-        raise RuntimeError(f"Error descargando de S3: {e}")
-
-# ───────────────────────────── FFMPEG (audio) ────────────────────────────
-def extract_wav_16k(src_video: str) -> Tuple[str, Optional[int]]:
-    out_wav = src_video + ".wav"
-    cmd = [
-        FFMPEG_BIN, "-y", "-i", src_video,
-        "-ac", "1", "-ar", str(AUDIO_RATE), "-vn", out_wav
-    ]
-    t0 = time.time()
-    subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    dur = int(time.time() - t0)
-    logger.info(f"Audio extraído (mono {AUDIO_RATE} Hz): {out_wav}")
-    return out_wav, dur
-
-# ───────────────────────────── Transcribe AWS ────────────────────────────
-def transcribe_aws_localfile(wav_path: str) -> str:
-    """
-    Minimal viable: sube a S3 y usa StartTranscriptionJob.
-    Si no se logra, devuelve "" (el caller hará fallback al transcript del front).
-    """
-    if not AWS_TRANSCRIBE_ENABLED:
-        return ""
-
-    # Subir a S3 temporal para transcribir (necesita bucket con permisos)
-    s3_key = f"transcribe_input/{Path(wav_path).name}"
-    s3 = boto3.client("s3", region_name=AWS_REGION)
-    try:
-        s3.upload_file(wav_path, AWS_S3_BUCKET_NAME, s3_key)
-    except Exception as e:
-        logger.warning(f"No se pudo subir WAV a S3 para Transcribe: {e}")
-        return ""
-
-    transcribe = boto3.client("transcribe", region_name=AWS_REGION)
-    job_name = f"leo-{int(time.time())}-{Path(wav_path).stem}".replace(".", "-")
-    media_uri = f"s3://{AWS_S3_BUCKET_NAME}/{s3_key}"
-
-    try:
-        transcribe.start_transcription_job(
-            TranscriptionJobName=job_name,
-            Media={"MediaFileUri": media_uri},
-            MediaFormat="wav",
-            LanguageCode=AWS_TRANSCRIBE_LANG,
-            Settings={"ShowSpeakerLabels": False},
-        )
-        # Poll sencillo (máx 90s)
-        for _ in range(90):
-            job = transcribe.get_transcription_job(TranscriptionJobName=job_name)
-            status = job["TranscriptionJob"]["TranscriptionJobStatus"]
-            if status in ("COMPLETED", "FAILED"):
-                break
-            time.sleep(1.5)
-
-        job = transcribe.get_transcription_job(TranscriptionJobName=job_name)
-        if job["TranscriptionJob"]["TranscriptionJobStatus"] != "COMPLETED":
-            logger.warning(f"Transcribe no COMPLETED: {job['TranscriptionJob']['TranscriptionJobStatus']}")
-            return ""
-
-        uri = job["TranscriptionJob"]["Transcript"]["TranscriptFileUri"]
-        # Descargar el JSON final
-        import requests
-        resp = requests.get(uri, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
-        text = data.get("results", {}).get("transcripts", [{}])[0].get("transcript", "")
-        return (text or "").strip()
-
-    except Exception as e:
-        logger.warning(f"AWS Transcribe error: {e}")
-        return ""
-    finally:
-        # Limpieza S3 temporal (ignorar errores)
+def _safe_rm(*paths: str):
+    for p in paths:
         try:
-            s3.delete_object(Bucket=AWS_S3_BUCKET_NAME, Key=s3_key)
+            if p and os.path.exists(p):
+                os.remove(p)
         except Exception:
             pass
 
-# ───────────────────────────── UTIL FRONT TXT ────────────────────────────
-def unify_front_transcript(raw_front: Any) -> str:
-    """
-    Acepta str JSON (lista) o lista ya parseada. Devuelve un string unificado.
-    """
-    if not raw_front:
-        return ""
-    try:
-        if isinstance(raw_front, str):
-            txt = raw_front.strip()
-            if txt.startswith("["):
-                arr = json.loads(txt)
-            else:
-                arr = [txt]
-        elif isinstance(raw_front, list):
-            arr = raw_front
-        else:
-            arr = []
-        parts = [str(s).strip() for s in arr if str(s).strip()]
-        return "\n".join(parts)
-    except Exception:
-        return ""
+# ────────────────── TASK ──────────────────
 
-# ────────────────────────────── TASK PRINCIPAL ───────────────────────────
-@celery_app.task(name="process_session_transcript")
-def process_session_transcript(payload: Dict[str, Any]) -> Dict[str, Any]:
+@celery_app.task(
+    soft_time_limit=CELERY_SOFT_LIMIT,
+    time_limit=CELERY_HARD_LIMIT,
+    bind=True,
+    name="celery_worker.process_session_transcript",
+)
+def process_session_transcript(self, payload: dict):
     """
-    payload esperado (mínimo):
-    {
-      "session_id": 123,
-      "s3_key" | "video_object_key" | "object_key": "uploads/abc123.webm",
-      "user_transcript": [... o str],   # opcional (del front)
-      "leo_text": "",                   # opcional (transcript avatar)
-      "duration_seconds" | "duration": 0
-    }
+    payload:
+      - session_id (int)            obligatorio
+      - video_object_key (str)      obligatorio (clave S3 del .webm)
+      - duration (int)              opcional
     """
-    logger.info(f"🟢 START payload={payload}")
-    sid = payload.get("session_id")
+    logging.info("🟢 START task=%s payload=%s", self.request.id, payload)
+
+    sid    = payload.get("session_id")
+    vkey   = payload.get("video_object_key")
+    dur    = int(payload.get("duration", 0))
+    ts_iso = datetime.utcnow().isoformat()
+
     if not sid:
-        raise ValueError("Falta 'session_id' en payload.")
+        logging.error("🚫 payload sin session_id")
+        return
+    if not vkey:
+        logging.warning("🚫 session %s: falta video_object_key", sid)
+        _update_db_only_public(sid, "⚠️ Falta video_object_key — no se procesó", dur, None, ts_iso)
+        return
 
-    # Acepta alias para el key del objeto en S3
-    s3_key = payload.get("s3_key") or payload.get("video_object_key") or payload.get("object_key")
-    s3_url = payload.get("s3_url")
-    user_transcript_front = payload.get("user_transcript")
-    leo_text = payload.get("leo_text") or ""
-    dur_front = int(payload.get("duration_seconds") or payload.get("duration") or 0)
+    # 1) Descarga .webm
+    webm = os.path.join(TMP_DIR, os.path.basename(vkey))
+    if not dl_s3(AWS_S3_BUCKET_NAME, vkey, webm):
+        _update_db_only_public(sid, "⚠️ Video no encontrado en S3", dur, vkey, ts_iso)
+        return
 
-    # 1) Obtener archivo local (priorizar s3_key)
-    local_video = None
-    try:
-        if s3_key:
-            local_video = s3_download_to_tmp(s3_key)
-        elif s3_url:
-            # Descargar por URL (presigned)
-            import requests
-            fd, p = tempfile.mkstemp(prefix="leo_", suffix=".webm")
-            os.close(fd)
-            r = requests.get(s3_url, timeout=60)
-            r.raise_for_status()
-            with open(p, "wb") as f:
-                f.write(r.content)
-            local_video = p
-        else:
-            raise ValueError("Falta s3_key/video_object_key/object_key o s3_url en payload.")
-    except Exception as e:
-        logger.error(f"Error obteniendo video: {e}")
-        local_video = None
+    # 2) Extrae WAV
+    wav = webm.rsplit(".", 1)[0] + ".wav"
+    if not run_ffmpeg_to_wav(webm, wav):
+        _update_db_only_public(sid, "⚠️ No se pudo extraer audio", dur, vkey, ts_iso)
+        _safe_rm(webm, wav)
+        return
 
-    # 2) Extraer WAV 16k si hay video
-    local_wav, dur_audio = (None, None)
-    if local_video:
-        try:
-            local_wav, dur_audio = extract_wav_16k(local_video)
-        except Exception as e:
-            logger.warning(f"No se pudo extraer audio: {e}")
-
-    # 3) Transcribir con AWS (si posible)
+    # 3) Sube WAV y transcribe
+    audio_url = up_s3(wav, AWS_S3_BUCKET_NAME, f"audio/{os.path.basename(wav)}")
     user_txt = ""
-    if local_wav:
+    if audio_url:
         try:
-            user_txt = transcribe_aws_localfile(local_wav)
-        except Exception as e:
-            logger.warning(f"Fallo transcripción AWS: {e}")
-
-    # 4) Fallback con transcript del front si lo anterior quedó corto o vacío
-    if not user_txt or len(user_txt.split()) < 12:  # umbral mínimo
-        fallback_txt = unify_front_transcript(user_transcript_front)
-        if fallback_txt:
-            logger.info("Usando FALLBACK del transcript del front (por baja/ausente transcripción AWS).")
-            # Opcional: combinar ambos
-            if user_txt:
-                user_txt = (user_txt.strip() + "\n" + fallback_txt.strip()).strip()
-            else:
-                user_txt = fallback_txt
-
-    # 5) Evaluar y persistir (solo si tenemos algo de texto)
-    if not user_txt:
-        public_msg = "No se obtuvo transcripción utilizable. Intenta nuevamente o revisa tu micrófono."
-        # Aun así dejamos rastro mínimo en BD (sin tocar evaluation_rh)
-        try:
-            conn = get_conn()
-            with conn.cursor() as cur:
-                cur.execute(
-                    "UPDATE interactions SET evaluation = %s, duration_seconds = %s, audio_path = %s, timestamp = %s WHERE id = %s",
-                    (public_msg, int(dur_front or dur_audio or 0), s3_key or s3_url or "", datetime.utcnow(), int(sid))
-                )
-            conn.commit()
-        finally:
-            conn.close()
-        logger.info(f"🔴 DONE sid={sid} reason=no_transcript")
-        return {"ok": False, "reason": "no_transcript", "session_id": sid}
-
-    res = evaluate_and_persist(str(sid), user_txt, leo_text, local_video or "")
-
-    # 6) Actualizar bloque público y metadatos (NO tocar evaluation_rh aquí)
-    try:
-        conn = get_conn()
-        with conn.cursor() as cur:
-            cur.execute(
-                "UPDATE interactions SET evaluation = %s, duration_seconds = %s, audio_path = %s, timestamp = %s WHERE id = %s",
-                (res.get("public", ""), int(dur_front or dur_audio or 0), s3_key or s3_url or "", datetime.utcnow(), int(sid))
+            job = f"leo-{sid}-{secrets.token_hex(4)}"
+            transcribe.start_transcription_job(
+                TranscriptionJobName=job,
+                Media={"MediaFileUri": audio_url},
+                MediaFormat="wav",
+                LanguageCode=TRANSCRIBE_LANG,  # ej. es-MX / es-US / es-ES
             )
-        conn.commit()
-    finally:
-        conn.close()
+            # Polling simple
+            for _ in range(60):  # hasta ~8 min (60 * 8s)
+                status = transcribe.get_transcription_job(TranscriptionJobName=job)["TranscriptionJob"]
+                state = status["TranscriptionJobStatus"]
+                if state in {"COMPLETED", "FAILED"}:
+                    break
+                time.sleep(8)
+            if state == "COMPLETED":
+                uri = status["Transcript"]["TranscriptFileUri"]
+                user_txt = requests.get(uri, timeout=20).json()["results"]["transcripts"][0]["transcript"]
+            else:
+                logging.error("Transcribe FAILED para sid=%s", sid)
+        except Exception as e:
+            logging.exception("[TRANSCRIBE] sid=%s error=%s", sid, e)
 
-    logger.info(f"✅ DONE sid={sid} level={res.get('level', 'alto')}")
-    return {"ok": True, "session_id": sid, "level": res.get("level", "alto")}
+    # Clip de seguridad por tokens
+    MAX_CHARS = 24_000
+    user_txt = (user_txt or "")[-MAX_CHARS:]
+
+    # 4) Evalúa y PERSISTE (evaluation_rh) vía evaluator
+    try:
+        res = evaluate_and_persist(sid, user_txt, "", None)
+        public_text = res.get("public", "Evaluación generada.")
+        internal_preview = res.get("internal", {}) or {}
+        dv_total = (internal_preview.get("da_vinci_points") or {}).get("total")
+        logging.info("[EVAL OK] sid=%s dv_total=%s kpi_avg=%s",
+                     sid, dv_total, (internal_preview.get("kpis") or {}).get("avg_score"))
+    except Exception as e:
+        logging.exception("[EVALUATE_PERSIST] sid=%s error=%s", sid, e)
+        public_text = "⚠️ Evaluación automática no disponible."
+
+    # 5) Actualiza SOLO campos públicos/operativos
+    _update_db_only_public(sid, public_text, dur, vkey, ts_iso)
+
+    # 6) Limpieza
+    _safe_rm(webm, wav)
+    logging.info("✅ DONE task=%s sid=%s", self.request.id, sid)
+
+# ────────────────── INIT DB (defensivo) ──────────────────
+
+def init_db():
+    conn = db_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS interactions (
+            id SERIAL PRIMARY KEY,
+            name TEXT,
+            email TEXT,
+            scenario TEXT,
+            message TEXT,
+            response TEXT,
+            audio_path TEXT,
+            timestamp TEXT,
+            evaluation TEXT,
+            evaluation_rh TEXT,
+            duration_seconds INTEGER DEFAULT 0,
+            tip TEXT,
+            visual_feedback TEXT,
+            visible_to_user BOOLEAN DEFAULT FALSE,
+            avatar_transcript TEXT,
+            rh_comment TEXT
+        );"""
+    )
+    conn.commit()
+    conn.close()
+
+init_db()
