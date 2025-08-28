@@ -49,6 +49,24 @@ def normalize(txt: str) -> str:
     t = re.sub(r"\s+", " ", t).strip()
     return t
 
+# === NUEVO: matching tolerante a espacios internos (p. ej. "re flu jo") ===
+def contains_with_gaps(haystack: str, token: str) -> bool:
+    """
+    Devuelve True si 'haystack' contiene 'token' aun si en el texto
+    hay espacios entre letras (ASR roto: "re flu jo" ≈ "reflujo").
+    Asume que 'haystack' y 'token' ya están normalizados (lower, sin acentos).
+    """
+    if not token:
+        return False
+    if token in haystack:
+        return True
+    # permite espacios arbitrarios entre caracteres del token
+    pattern = r"\s*".join(map(re.escape, token))
+    if re.search(pattern, haystack):
+        return True
+    # compara versión compactada (sin espacios)
+    return token.replace(" ", "") in haystack.replace(" ", "")
+
 def canonicalize_products(nt: str) -> str:
     """
     Normaliza variantes del producto a 'esoxx-one' y 'sinair' (tolerante a ASR).
@@ -236,7 +254,7 @@ def score_weighted_phrases(t: str) -> Dict[str, object]:
     for pts_key, phrases in WEIGHTED_KWS.items():
         pts = int(re.sub(r"[^0-9]", "", pts_key) or "0")
         for p in phrases:
-            if fuzzy_contains(nt, p, 0.80):
+            if fuzzy_contains(nt, p, 0.80) or contains_with_gaps(nt, p):
                 total += pts
                 breakdown.append({"phrase": p, "points": pts})
     return {"total_points": total, "breakdown": breakdown}
@@ -248,7 +266,7 @@ def score_davinci_points(t: str) -> Dict[str, int]:
         s = 0
         for pts, plist in rules.items():
             for p in plist:
-                if fuzzy_contains(nt, p, 0.79):
+                if fuzzy_contains(nt, p, 0.78) or contains_with_gaps(nt, p):
                     s += int(pts)
         out[stage] = s
     out["total"] = sum(out.values())
@@ -256,11 +274,14 @@ def score_davinci_points(t: str) -> Dict[str, int]:
 
 def kw_score(t: str) -> int:
     nt = canonicalize_products(normalize(t))
-    return sum(1 for kw in KW_LIST if fuzzy_contains(nt, kw, 0.84))
+    return sum(
+        1 for kw in KW_LIST
+        if fuzzy_contains(nt, kw, 0.80) or contains_with_gaps(nt, kw)
+    )
 
 def disq_flag(t: str) -> bool:
     nt = normalize(t)
-    return any(fuzzy_contains(nt, w, 0.88) for w in BAD_PHRASES)
+    return any(fuzzy_contains(nt, w, 0.88) for w in BAD_PHRASES))
 
 def product_compliance(t: str) -> Tuple[Dict[str, dict], int]:
     nt = canonicalize_products(normalize(t))
@@ -268,7 +289,10 @@ def product_compliance(t: str) -> Tuple[Dict[str, dict], int]:
     total = 0
     for cat, cfg in PRODUCT_RUBRIC.items():
         weight: int = int(cfg["weight"])
-        hits = [p for p in cfg["phrases"] if fuzzy_contains(nt, p, 0.80)]
+        hits = [
+            p for p in cfg["phrases"]
+            if fuzzy_contains(nt, p, 0.80) or contains_with_gaps(nt, p)
+        ]
         score = weight if hits else 0
         total += score
         detail[cat] = {"weight": weight, "hits": hits, "score": score}
@@ -389,8 +413,7 @@ Devuelve JSON compacto con esta forma (sin texto extra):
   "overall_evaluation": "1-2 frases para RH resumiendo desempeño"
 }}
 Texto:
-\"\"\"{user_text[:24000]}\"\"\"
-"""
+\"\"\"{user_text[:24000]}\"\"\""""
     try:
         resp = client.chat.completions.create(
             model=OPENAI_MODEL,
