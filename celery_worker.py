@@ -5,7 +5,7 @@ Flujo resumido
 - Recibe payload con: session_id (obligatorio), video_object_key (opcional), timestamp_iso (opcional)
 - Si viene video_object_key:
     1) [Opcional] Descarga de S3 (si AWS_* configurado)
-    2) (Opcional) Extrae audio / transcribe si lo necesitas (aquí dejamos el hook)
+    2) (Opcional) Extrae audio / transcribe si lo necesitas (hook disponible)
     3) Llama a evaluate_and_persist(session_id, user_text, leo_text="", video_path o None)
     4) Actualiza SOLO el bloque 'evaluation' público y metadatos
 - Si NO viene video_object_key:
@@ -25,7 +25,7 @@ import logging
 from datetime import datetime
 from urllib.parse import urlparse
 from celery import Celery
-from typing import Optional, Tuple
+from typing import Optional
 
 # ---------- Config básica ----------
 LOG_LEVEL = os.getenv("EVAL_LOG_LEVEL", "INFO").upper()
@@ -160,7 +160,6 @@ def _maybe_download_from_s3(object_key: str) -> Optional[str]:
         return None
 
 # ---------- Import del evaluator ----------
-# Nota: el evaluator se espera en el mismo contenedor / venv
 from evaluator import evaluate_and_persist
 
 # ---------- Tarea principal ----------

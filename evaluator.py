@@ -52,33 +52,28 @@ def normalize(txt: str) -> str:
 # === NUEVO: matching tolerante a espacios internos (p. ej. "re flu jo") ===
 def contains_with_gaps(haystack: str, token: str) -> bool:
     """
-    Devuelve True si 'haystack' contiene 'token' aun si en el texto
-    hay espacios entre letras (ASR roto: "re flu jo" ≈ "reflujo").
-    Asume que 'haystack' y 'token' ya están normalizados (lower, sin acentos).
+    True si 'haystack' contiene 'token' aun si hay espacios entre letras.
+    Asume que ambos ya están normalizados.
     """
     if not token:
         return False
     if token in haystack:
         return True
-    # permite espacios arbitrarios entre caracteres del token
     pattern = r"\s*".join(map(re.escape, token))
     if re.search(pattern, haystack):
         return True
-    # compara versión compactada (sin espacios)
     return token.replace(" ", "") in haystack.replace(" ", "")
 
 def canonicalize_products(nt: str) -> str:
     """
     Normaliza variantes del producto a 'esoxx-one' y 'sinair' (tolerante a ASR).
     """
-    # ESOXX-ONE
     variants_esoxx = [
         r"\beso\s*xx\s*one\b", r"\besox+\s*one\b", r"\besoxx-one\b",
         r"\besof+\s*one\b", r"\becox+\s*one\b", r"\besox+\b", r"\besof+\b",
         r"\becox+\b", r"\beso\s*xx\b", r"\besoft\s*one\b", r"\besoxxone\b",
         r"\bays?oks?\b", r"\bays?oks?\s*one\b", r"\besok+\b", r"\besoxx one\b",
     ]
-    # SINAIR (variantes comunes de ASR)
     variants_sinair = [
         r"\bsinair\b", r"\bsinairr?\b", r"\bzinair\b", r"\bsi\s*nair\b",
         r"\bsinar\b", r"\bsin ar\b", r"\bsineir\b", r"\bzin air\b"
@@ -91,9 +86,6 @@ def canonicalize_products(nt: str) -> str:
     return canon
 
 def detect_product(raw_text: str) -> str:
-    """
-    Devuelve 'ESOXX-ONE', 'SINAIR' o 'Producto' según lo que aparezca en el transcript.
-    """
     t = canonicalize_products(normalize(raw_text))
     if "sinair" in t:
         return "SINAIR"
@@ -281,7 +273,7 @@ def kw_score(t: str) -> int:
 
 def disq_flag(t: str) -> bool:
     nt = normalize(t)
-    return any(fuzzy_contains(nt, w, 0.88) for w in BAD_PHRASES))
+    return any(fuzzy_contains(nt, w, 0.88) for w in BAD_PHRASES)
 
 def product_compliance(t: str) -> Tuple[Dict[str, dict], int]:
     nt = canonicalize_products(normalize(t))
@@ -391,10 +383,6 @@ def safe_div(a: float, b: float) -> float:
 
 # ─────────── OpenAI (opcional) ───────────
 def gpt_semantic_feedback(user_text: str) -> Optional[dict]:
-    """
-    Devuelve un dict con evaluación por fases (0–5) y comentarios.
-    Si no hay OpenAI o falla, devuelve None.
-    """
     if not client:
         return None
     prompt = f"""
@@ -435,7 +423,7 @@ def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str
 
     # 2) Reglas
     weighted    = score_weighted_phrases(user_text)
-    davinci_pts = score_davinci_points(user_text)  # total típico ~0–8 aprox
+    davinci_pts = score_davinci_points(user_text)
     legacy_8    = kw_score(user_text)              # 0–8
     iq          = interaction_quality(user_text)
     prod_detail, prod_total = product_compliance(user_text)
@@ -444,7 +432,6 @@ def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str
     gpt_fb = gpt_semantic_feedback(user_text)
 
     # 4) Normalizaciones (0–100)
-    # Modelo de ventas
     dv_norm_rules = min(davinci_pts.get("total", 0), 8) / 8.0 * 100.0
     if gpt_fb and "Modelo_DaVinci" in gpt_fb:
         md = gpt_fb["Modelo_DaVinci"]
@@ -455,15 +442,13 @@ def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str
     else:
         modelo_ventas_pct = dv_norm_rules
 
-    # Conocimiento de producto
     legacy_pct = (legacy_8 / 8.0) * 100.0
     max_prod = sum(int(cfg["weight"]) for cfg in PRODUCT_RUBRIC.values())
     prod_pct = safe_div(prod_total, max_prod) * 100.0
-    weighted_cap = min(int(weighted["total_points"]), 24)  # cap razonable
+    weighted_cap = min(int(weighted["total_points"]), 24)
     weighted_pct = (weighted_cap / 24.0) * 100.0
     conocimiento_pct = 0.5 * legacy_pct + 0.3 * prod_pct + 0.2 * weighted_pct
 
-    # Interacción
     listen_map = {"Baja": 30, "Moderada": 65, "Alta": 90}
     listen_pct = listen_map.get(iq.get("active_listening_level","Baja"), 30)
     closing_pct = 85 if iq.get("closing_present") else 40
@@ -474,21 +459,17 @@ def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str
     else: qrate_pct = 60
     interaccion_pct = round(0.5 * listen_pct + 0.3 * closing_pct + 0.2 * qrate_pct, 1)
 
-    # Visual
     if vis_ratio is None:
-        visual_pct = 50  # neutro
+        visual_pct = 50
     else:
         base = 20 + (max(0.0, min(1.0, vis_ratio)) * 100)
         visual_pct = max(20, min(100, base if vis_ratio <= 0.9 else 100))
 
-    # 5) Composite (40/30/20/10)
     composite = round(0.4 * modelo_ventas_pct + 0.3 * conocimiento_pct + 0.2 * interaccion_pct + 0.1 * visual_pct, 1)
     level_lbl = pct_label(composite)
 
-    # 6) Flags y notas
     red_flag = disq_flag(user_text)
 
-    # 7) Resumen narrativo + Tips
     fortalezas, debilidades = [], []
     if modelo_ventas_pct >= 70: fortalezas.append("Aplicación sólida del modelo de ventas (flujo ordenado).")
     else: debilidades.append("Estructura de la visita mejorable (preparación/apertura/cierre incompletos).")
@@ -513,29 +494,20 @@ def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str
         f"Áreas de mejora:{join_bullets(debilidades)}"
     )
 
-    # Tip breve y accionable
-    if debilidades:
-        tip = debilidades[0]
-    else:
-        tip = "Mantén el enfoque: cierra con un siguiente paso claro y medible."
+    tip = debilidades[0] if debilidades else "Mantén el enfoque: cierra con un siguiente paso claro y medible."
 
-    # 8) Bloque público breve y contextual (producto detectado)
     product_label = detect_product(user_text)
     public = f"{product_label}: desempeño {level_lbl} ({composite}/100). Recomendación: {tip}"
 
-    # 9) Empaque de métricas para admin (compatibles con tu UI)
     internal: Dict[str, Any] = {
         "overall_training_summary": overall_training_summary,
-        "gpt_detailed_feedback": None,  # se llena si hay GPT
+        "gpt_detailed_feedback": None,
         "da_vinci_points": davinci_pts,
         "knowledge_score_legacy": f"{legacy_8}/8",
         "knowledge_score_legacy_num": legacy_8,
         "knowledge_weighted_total_points": weighted["total_points"],
         "knowledge_weighted_breakdown": weighted["breakdown"],
-        "product_claims": {
-            "detail": prod_detail,
-            "product_score_total": prod_total
-        },
+        "product_claims": {"detail": prod_detail, "product_score_total": prod_total},
         "interaction_quality": iq,
         "active_listening_simple_detection": iq.get("active_listening_level"),
         "visual_presence": vis_int,
@@ -546,15 +518,14 @@ def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str
             "conocimiento_pct": round(conocimiento_pct, 1),
             "interaccion_pct": round(interaccion_pct, 1),
             "visual_pct": round(visual_pct, 1),
-            "avg_score": composite,              # <- ranking
-            "avg_phase_score_1_3": round(( (legacy_pct) + (prod_pct) + (weighted_pct) ) / 3.0, 1),
-            "avg_steps_pct": round(safe_div(
-                int(iq["da_vinci_step_flags"]["steps_applied_count"].split("/")[0]), 5
-            ) * 100.0, 1),
+            "avg_score": composite,
+            "avg_phase_score_1_3": round(((legacy_pct) + (prod_pct) + (weighted_pct)) / 3.0, 1),
+            "avg_steps_pct": round((int(iq["da_vinci_step_flags"]["steps_applied_count"].split("/")[0]) / 5) * 100.0, 1),
             "legacy_count": legacy_8
         }
     }
 
+    gpt_fb = gpt_semantic_feedback(user_text)
     if gpt_fb:
         md = gpt_fb.get("Modelo_DaVinci", {})
         internal["gpt_detailed_feedback"] = {
@@ -572,13 +543,19 @@ def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str
 
     level = level_lbl.lower()
 
-    return {
-        "public": public,
-        "internal": internal,
-        "level": level
-    }
+    return {"public": public, "internal": internal, "level": level}
 
 # ─────────── Persistencia ───────────
+def get_db_connection():
+    database_url = os.getenv("DATABASE_URL")
+    if not database_url:
+        raise ValueError("DATABASE_URL environment variable is not set!")
+    parsed = urlparse(database_url)
+    return psycopg2.connect(
+        database=parsed.path[1:], user=parsed.username, password=parsed.password,
+        host=parsed.hostname, port=parsed.port, sslmode="require",
+    )
+
 def evaluate_and_persist(session_id: int, user_text: str, leo_text: str, video_path: Optional[str]) -> Dict[str, Any]:
     """Evalúa y guarda en BD el bloque interno (RH). El worker actualizará el público."""
     try:
@@ -592,7 +569,6 @@ def evaluate_and_persist(session_id: int, user_text: str, leo_text: str, video_p
     tip = "Consejo pendiente."
     visual_feedback = internal.get("visual_presence", "")
 
-    # Tip breve (si existe recomendación de follow_up)
     if internal.get("follow_up_suggestions"):
         tip = str(internal["follow_up_suggestions"][0])[:240]
     else:
@@ -600,7 +576,6 @@ def evaluate_and_persist(session_id: int, user_text: str, leo_text: str, video_p
         if len(tip) > 240:
             tip = tip[:240]
 
-    # Persistir en BD
     try:
         conn = get_db_connection()
         cur = conn.cursor()
