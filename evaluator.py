@@ -1,43 +1,27 @@
-# === evaluator.py — Evaluación por CONCEPTOS + salida dual (Usuario / RH) ===
-# - Robusto a transcripción ruidosa: usa embeddings (si hay OPENAI_API_KEY)
-# - Genera resumen diplomático para el usuario y tarjeta “dura” para Capacitación.
-# - Sin dependencias de video (opcional, desactivado por defecto).
-# -----------------------------------------------------------------------------
-
-from __future__ import annotations
-import os, json, re, textwrap, unicodedata, difflib
+# evaluator.py
+# -------------------------------------------------------------------
+# Analiza una simulación Representante ↔ Médico (texto + video opc.)
+# Guarda SIEMPRE métricas en BD cuando se llama vía evaluate_and_persist().
+# Retorna: {"public": str, "internal": dict, "level": "alto"|"error"}
+# -------------------------------------------------------------------
+import os, json, textwrap, unicodedata, re, difflib
 from typing import Optional, Dict, List, Tuple
 from urllib.parse import urlparse
-from functools import lru_cache
 
-# ---- Dependencias externas
-import psycopg2
-
-# OpenAI (chat + embeddings)
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+# OpenCV opcional (presencia en video)
 try:
-    from openai import OpenAI
-    _openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
-except Exception:
-    _openai_client = None
-
-# NumPy para cosenos (si no, fallback simple)
-try:
-    import numpy as np
-except Exception:
-    np = None
-
-# Video opcional (desactivado por defecto)
-try:
-    import cv2  # noqa
-except Exception:
+    import cv2
+except ImportError:
     cv2 = None
 
-EVAL_ENABLE_VIDEO = os.getenv("EVAL_ENABLE_VIDEO", "0") == "1"
-EMBED_MODEL = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small")
-CHAT_MODEL  = os.getenv("OPENAI_GPT_MODEL", "gpt-4o-mini")
+import psycopg2
+from openai import OpenAI
+from dotenv import load_dotenv
 
-# ───────────────────── Utilidades de texto ─────────────────────
+load_dotenv()
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY", ""))
+
+# ───────────────────────── Utils ─────────────────────────
 
 def normalize(txt: str) -> str:
     if not txt:
@@ -49,16 +33,16 @@ def normalize(txt: str) -> str:
     return t
 
 def canonicalize_products(nt: str) -> str:
-    """Normaliza variantes del producto a 'esoxx one' (tolerante a ASR)."""
+    """Normaliza variantes del producto a 'esoxx-one' (tolerante a ASR)."""
     variants = [
-        r"\beso\s*xx\s*one\b", r"\besox+\s*one\b", r"\besoxx[-\s]*one\b",
+        r"\beso\s*xx\s*one\b", r"\besox+\s*one\b", r"\besoxx-one\b",
         r"\besof+\s*one\b", r"\becox+\s*one\b", r"\besox+\b", r"\besof+\b",
-        r"\becox+\b", r"\beso\s*xx\b", r"\besoxxone\b", r"\besoks?\b",
-        r"\bes oks?\s*one\b", r"\bes ok\s*one\b",
+        r"\becox+\b", r"\beso\s*xx\b", r"\besoft\s*one\b", r"\besoxxone\b",
+        r"\bays?oks?\b", r"\bays?oks?\s*one\b", r"\besok+\b",
     ]
     canon = nt
     for pat in variants:
-        canon = re.sub(pat, "esoxx one", canon)
+        canon = re.sub(pat, "esoxx-one", canon)
     return canon
 
 def fuzzy_contains(haystack: str, needle: str, threshold: float = 0.82) -> bool:
@@ -66,194 +50,250 @@ def fuzzy_contains(haystack: str, needle: str, threshold: float = 0.82) -> bool:
         return False
     if needle in haystack:
         return True
-    toks = haystack.split()
+    tokens = haystack.split()
     win = min(max(len(needle.split()) + 4, 8), 40)
-    for i in range(0, max(1, len(toks) - win + 1)):
-        segment = " ".join(toks[i:i+win])
+    for i in range(0, max(1, len(tokens) - win + 1)):
+        segment = " ".join(tokens[i:i+win])
         if difflib.SequenceMatcher(None, segment, needle).ratio() >= threshold:
             return True
     return difflib.SequenceMatcher(None, haystack, needle).ratio() >= max(0.70, threshold - 0.1)
 
-# ───────────────────── Conceptos semánticos ─────────────────────
+def count_fuzzy_any(nt: str, phrases: List[str], thr: float = 0.82) -> int:
+    return sum(1 for p in phrases if fuzzy_contains(nt, p, thr))
 
-SEM_CONCEPTS = {
-    "apertura_descubrimiento":
-        "Saludo breve y exploración de necesidades del médico: preguntas sobre pacientes, preocupaciones y contexto clínico.",
-    "posologia_completa":
-        "Posología exacta de ESOXX ONE: un stick después de cada comida y uno antes de dormir; esperar 30 a 60 minutos sin ingerir alimentos o bebidas.",
-    "evidencia_trazable":
-        "Evidencia clínica trazable: menciona autor y año o población y endpoint con resultado claro; evita porcentajes no sustentados.",
-    "mecanismo_correcto":
-        "Mecanismo correcto de ESOXX ONE: dispositivo tópico esofágico que forma una barrera bioadhesiva con ácido hialurónico, condroitina y poloxámero 407.",
-    "sinergia_ibp":
-        "Uso como adyuvante con inhibidores de bomba de protones (IBP), con beneficio frente a monoterapia con IBP.",
-    "cierre_con_acuerdo":
-        "Propone un siguiente paso clínico concreto: prueba con pacientes indicados y acuerda seguimiento con fecha.",
-    "manejo_objeciones":
-        "Escucha objeciones y las aborda con información clínica y tono empático.",
-    "escucha_activa_reflejo":
-        "Parafrasea o valida lo dicho por el médico antes de argumentar; demuestra escucha activa.",
-    "seguridad_moderada":
-        "Seguridad con lenguaje clínico moderado: bien tolerado, acción local, evita absolutos y promesas.",
+# ─────────── Scoring config (claims + Da Vinci) ───────────
+
+WEIGHTED_KWS = {
+    "3pt": [
+        "esoxx-one mejora hasta 90% todos los sintomas de la erge",
+        "esoxx-one reduce hasta 90% la frecuencia y severidad de los sintomas de erge",
+        "esoxx-one demostro mejoria significativa de los sintomas esofagicos y extraesofagicos de la erge",
+        "esoxx-one mas ibp es significativamente mas eficaz que la monoterapia con ibp para la epitelizacion esofagica",
+        "reduce significativamente los sintomas de la erge vs monoterapia ibps",
+        "alivio en menor tiempo (2 semanas vs 4 semanas)",
+        "reduccion del uso de antiacidos",
+        "demostrado en ninos y adolescentes",
+        "reduce la falla al tratamiento",
+    ],
+    "2pt": [
+        "protege y repara mucosa esofagica",
+        "protege y promueve la reparacion de la mucosa esofagica",
+        "barrera bioadhesiva",
+        "combinacion de 3 activos",
+        "acido hialuronico",
+        "sulfato de condroitina",
+        "poloxamero 407",
+        "recubre el epitelio esofagico",
+        "liquido a temperatura ambiente y en estado gel a temperatura corporal",
+        "un sobre despues de cada comida y antes de dormir",
+        "esperar por lo menos 30min despues sin tomar alimentos o bebidas",
+        "esperar 60min",
+        "esperar 1hr",
+    ],
+    "1pt": [
+        "mecanismo de proteccion original e innovador para el manejo de la erge",
+        "alivia los sintomas del erge",
+        "esoxx-one",
+        "forma un complejo macromolecular que recubre la mucosa esofagica",
+        "actua como barrera mecanica contra componentes nocivos del reflujo",
+        "mejora la calidad de vida de los pacientes",
+        "unico",
+    ],
 }
 
-ABSOLUTES   = ["el mejor", "completamente seguro", "totalmente seguro", "no tiene efectos", "para todos"]
-BAD_PHRASES = ["no se", "no tengo idea", "lo invento", "no estudie", "no me acuerdo"]
-SENSITIVE   = ["embarazad", "niños", "pediatr", "descuento", "promocion", "3x4", "precio en clinica"]
-LISTEN_KW   = ["entiendo", "comprendo", "veo que", "si entiendo bien", "parafrase", "que le preocupa"]
-CLOSE_KW    = ["siguiente paso", "podemos acordar", "puedo contar con", "le parece si", "empezar a considerar"]
+# Ampliado con frases que aparecen en tus demos (más flexibles)
+DAVINCI_POINTS = {
+    "preparacion": {
+        2: ["objetivo smart", "mi objetivo hoy es", "metas smart"],
+        1: [
+            "objetivo de la visita", "propósito de la visita", "mensaje clave",
+            "hoy quiero", "plan para hoy", "materiales", "presentacion preparada"
+        ],
+    },
+    "apertura": {
+        2: [
+            "cuales son las mayores preocupaciones", "principal preocupacion",
+            "que caracteristicas tienen sus pacientes", "visita anterior",
+            "me gustaria conocer", "que es lo que mas le preocupa"
+        ],
+        1: [
+            "buenos dias", "buen dia", "hola doctora", "mi nombre es",
+            "como ha estado", "gracias por su tiempo"
+        ],
+    },
+    "persuasion": {
+        2: [
+            "que caracteristicas considera ideales", "objetivos de tratamiento",
+            "combinado con ibp", "sinergia con inhibidores de la bomba de protones",
+            "mecanismo", "beneficio", "evidencia", "estudio",
+            "tres componentes", "acido hialuronico", "condroitin", "poloxamero",
+        ]
+    },
+    "cierre": {
+        2: [
+            "con base a lo dialogado considera que esoxx-one", "podria empezar con algun paciente",
+            "le parece si iniciamos", "empezar a considerar algun paciente",
+            "podemos acordar un siguiente paso", "puedo contar con su apoyo",
+        ],
+        1: ["siguiente paso", "podemos acordar", "puedo contar con", "le parece si"],
+    },
+    "analisis_post": {
+        2: ["auto-evaluacion", "plan para proxima visita", "que mejoraria para la proxima"],
+        1: ["objeciones", "proxima visita", "actualiza", "que aprendi"],
+    },
+}
 
-# ───────── Embeddings helpers (con degradación si no hay API) ─────────
+KW_LIST = ["beneficio", "estudio", "sintoma", "tratamiento", "reflujo", "mecanismo", "eficacia", "seguridad"]
+BAD_PHRASES = ["no se", "no tengo idea", "lo invento", "no lo estudie", "no estudie bien", "no conozco", "no me acuerdo"]
+LISTEN_KW  = [
+    "entiendo", "comprendo", "veo que", "lo que dices", "si entiendo bien", "parafraseando",
+    "que le preocupa", "me gustaria conocer", "que caracteristicas tienen", "podria contarme", "como describe a sus pacientes"
+]
 
-@lru_cache(maxsize=256)
-def _embed(text: str):
-    """Devuelve vector de embedding o lista vacía si no hay soporte."""
-    if not text or not _openai_client or not np:
-        return None
-    try:
-        text = text[:6000]
-        v = _openai_client.embeddings.create(model=EMBED_MODEL, input=text).data[0].embedding
-        return np.array(v, dtype=float)
-    except Exception:
-        return None
+# Rúbrica de producto ampliada (más cercana a tu pitch real)
+PRODUCT_RUBRIC: Dict[str, Dict[str, List[str] | int]] = {
+    "mecanismo": {
+        "weight": 2,
+        "phrases": [
+            "barrera bioadhesiva", "recubre el epitelio esofagico", "actua como barrera mecanica",
+            "poloxamero 407", "acido hialuronico", "sulfato de condroitina", "tres componentes",
+            "dispositivo medico", "sin interacciones con medicamentos", "actua en el esofago",
+        ],
+    },
+    "eficacia": {
+        "weight": 3,
+        "phrases": [
+            "mejora hasta 90% todos los sintomas", "reduce hasta 90% la frecuencia y severidad",
+            "alivio en menor tiempo", "reduce la falla al tratamiento", "reduce significativamente los sintomas",
+            "sinergia con inhibidores de la bomba de protones", "ibp mas esoxx-one",
+        ],
+    },
+    "evidencia": {
+        "weight": 2,
+        "phrases": [
+            "demostrado en ninos y adolescentes", "estudio", "evidencia", "mejoria significativa",
+            "reduccion del uso de antiacidos", "epitelizacion esofagica",
+        ],
+    },
+    "uso_posologia": {
+        "weight": 2,
+        "phrases": [
+            "un sobre despues de cada comida y antes de dormir",
+            "esperar por lo menos 30min", "esperar 60min", "esperar 1hr",
+            "liquido a temperatura ambiente y en estado gel a temperatura corporal",
+            "formar un gel en el esofago",
+        ],
+    },
+    "diferenciales": {
+        "weight": 1,
+        "phrases": [
+            "combinacion de 3 activos", "mecanismo de proteccion original", "unico",
+            "mejora la calidad de vida", "sin eventos adversos", "no se absorbe sistemicamente",
+        ],
+    },
+    "mensajes_base": {"weight": 1, "phrases": ["esoxx-one", "reflujo", "erge", "sintomas"]},
+}
 
-def _cos(a, b) -> float:
-    if not np or a is None or b is None:
-        return 0.0
-    na, nb = np.linalg.norm(a), np.linalg.norm(b)
-    if na == 0 or nb == 0:
-        return 0.0
-    return float(np.dot(a, b) / (na * nb))
+# ─────────── Scorers ───────────
 
-def semantic_concepts(text: str, thr: float = 0.75) -> Dict[str, float]:
-    """Devuelve {concepto: score_coseno} para conceptos presentes."""
-    if not text:
-        return {}
-    t_emb = _embed(text)
-    if t_emb is None:
-        return {}  # sin embeddings disponibles
-    hits = {}
-    for name, desc in SEM_CONCEPTS.items():
-        c_emb = _embed(f"[CONCEPTO] {name}: {desc}")
-        cos = _cos(t_emb, c_emb)
-        if cos >= thr:
-            hits[name] = round(cos, 3)
-    return hits
-
-def estimate_transcript_confidence(text: str) -> str:
-    nt = normalize(text)
-    toks = nt.split()
-    if len(toks) < 25:
-        return "Baja"
-    nonalpha = sum(1 for ch in text if not (ch.isalpha() or ch.isspace()))
-    ratio = nonalpha / max(1, len(text))
-    if ratio > 0.18:
-        return "Baja"
-    if ratio > 0.12:
-        return "Media"
-    return "Alta"
-
-# ───────────────── Señales simples + score conceptual ─────────────────
-
-def simple_signals(t: str) -> Dict[str, object]:
+def score_weighted_phrases(t: str) -> Dict[str, object]:
     nt = canonicalize_products(normalize(t))
-    sem_hits = semantic_concepts(t)  # {concept: cos}
-    sem_count = len(sem_hits)
+    breakdown, total = [], 0
+    for pts_key, phrases in WEIGHTED_KWS.items():
+        pts = int(re.sub(r"[^0-9]", "", pts_key) or "0")
+        for p in phrases:
+            if fuzzy_contains(nt, p, 0.80):
+                total += pts
+                breakdown.append({"phrase": p, "points": pts})
+    return {"total_points": total, "breakdown": breakdown}
 
-    q_rate = t.count("?") / max(1, len(nt.split()))
-    listening_hits = sum(1 for k in LISTEN_KW if fuzzy_contains(nt, k, 0.82))
-    if "escucha_activa_reflejo" in sem_hits:
-        listening_hits = max(listening_hits, 2)
+def score_davinci_points(t: str) -> Dict[str, int]:
+    nt = canonicalize_products(normalize(t))
+    out: Dict[str, int] = {}
+    for stage, rules in DAVINCI_POINTS.items():
+        s = 0
+        for pts, plist in rules.items():
+            for p in plist:
+                # umbral un poco más permisivo para fases
+                if fuzzy_contains(nt, p, 0.79):
+                    s += int(pts)
+        out[stage] = s
+    out["total"] = sum(out.values())
+    return out
 
-    closing_flag = ("cierre_con_acuerdo" in sem_hits) or any(fuzzy_contains(nt, k, 0.82) for k in CLOSE_KW)
+def kw_score(t: str) -> int:
+    nt = canonicalize_products(normalize(t))
+    return sum(1 for kw in KW_LIST if fuzzy_contains(nt, kw, 0.84))
 
-    legacy_kw = sum(
-        1 for k in ["beneficio", "estudio", "mecanismo", "posologia", "reflujo", "erge", "ibp", "seguridad"]
-        if fuzzy_contains(nt, k, 0.84)
-    )
-    legacy_kw = min(8, legacy_kw)
+def disq_flag(t: str) -> bool:
+    nt = normalize(t)
+    return any(fuzzy_contains(nt, w, 0.88) for w in BAD_PHRASES)
 
-    red_abs = any(fuzzy_contains(nt, w, 0.88) for w in ABSOLUTES)
-    red_bad = any(fuzzy_contains(nt, w, 0.88) for w in BAD_PHRASES)
-    red_sens= any(fuzzy_contains(nt, w, 0.86) for w in SENSITIVE)
+def product_compliance(t: str) -> Tuple[Dict[str, dict], int]:
+    nt = canonicalize_products(normalize(t))
+    detail: Dict[str, dict] = {}
+    total = 0
+    for cat, cfg in PRODUCT_RUBRIC.items():
+        weight: int = int(cfg["weight"])
+        hits = [p for p in cfg["phrases"] if fuzzy_contains(nt, p, 0.80)]
+        score = weight if hits else 0
+        total += score
+        detail[cat] = {"weight": weight, "hits": hits, "score": score}
+    return detail, total
 
-    confidence = estimate_transcript_confidence(t)
-
+def interaction_quality(t: str) -> Dict[str, object]:
+    nt = normalize(t)
+    tokens = nt.split()
+    length = len(tokens)
+    qmarks = t.count("?")
+    question_rate = round(qmarks / max(1, length) * 100, 2)
+    closing = any(fuzzy_contains(nt, k, 0.80) for k in [
+        "siguiente paso", "podemos acordar", "puedo contar con", "le parece si", "empezar a considerar"
+    ])
+    objections = any(fuzzy_contains(nt, k, 0.82) for k in ["objecion", "preocupacion", "duda", "reserva"])
+    listen_hits = count_fuzzy_any(nt, LISTEN_KW, 0.82)
+    listen_level = "Alta" if listen_hits >= 4 else "Moderada" if listen_hits >= 2 else "Baja"
     return {
-        "q_rate": round(q_rate, 3),
-        "listening_level": "Alta" if listening_hits >= 4 else "Moderada" if listening_hits >= 2 else "Baja",
-        "closing": closing_flag,
-        "concept_hits": sem_hits,
-        "concept_count": sem_count,
-        "legacy_kw": legacy_kw,
-        "red_flags": {"absolutes": red_abs, "ignorance": red_bad, "sensitive": red_sens},
-        "input_confidence": confidence
+        "length_tokens": length,
+        "question_rate": question_rate,
+        "closing_present": closing,
+        "objection_handling_signal": objections,
+        "active_listening_level": listen_level,
     }
 
-def score_and_risk(sig: Dict[str, object]) -> Tuple[int, str]:
-    score = 0
-    score += min(6, sig["concept_count"])                         # 0–6 por conceptos presentes
-    score += int((sig["legacy_kw"] / 8.0) * 4.0)                  # 0–4 por “señales de contenido”
-    score += 2 if sig["closing"] else 0                           # 0–2 si propone siguiente paso
-    score += 2 if sig["listening_level"] == "Alta" else (1 if sig["listening_level"] == "Moderada" else 0)  # 0–2
+# ─────────── Visual express ───────────
 
-    if sig["red_flags"]["absolutes"] or sig["red_flags"]["ignorance"]:
-        score = max(0, score - 2)
-    if sig["input_confidence"] == "Baja":
-        score = max(0, score - 1)
-
-    score = max(0, min(14, score))
-    if sig["red_flags"]["absolutes"] or sig["red_flags"]["ignorance"] or score <= 4:
-        risk = "ALTO"
-    elif score <= 9:
-        risk = "MEDIO"
-    else:
-        risk = "BAJO"
-    return score, risk
-
-def md_status_from_concepts(sem: Dict[str, float]) -> Dict[str, str]:
-    # Mapeo a “Excelente | Bien | Necesita Mejora”
-    def level(has: bool, strong: bool = False) -> str:
-        if strong:
-            return "Excelente" if has else "Necesita Mejora"
-        return "Bien" if has else "Necesita Mejora"
-
-    prep  = level("apertura_descubrimiento" in sem)
-    apertura = prep
-    pers  = "Excelente" if sum(k in sem for k in ["mecanismo_correcto","posologia_completa","evidencia_trazable","sinergia_ibp"]) >= 3 \
-            else "Bien" if sum(k in sem for k in ["mecanismo_correcto","posologia_completa","evidencia_trazable","sinergia_ibp"]) >= 1 \
-            else "Necesita Mejora"
-    cierre = "Excelente" if "cierre_con_acuerdo" in sem else "Necesita Mejora"
-    post   = "Bien" if "manejo_objeciones" in sem else "Necesita Mejora"
-    return {
-        "preparacion": prep,
-        "apertura": apertura,
-        "persuasion": pers,
-        "cierre": cierre,
-        "analisis_post": post,
-    }
-
-# ──────────────────── OpenAI helpers (safe) ────────────────────
-
-def chat_json(prompt_system: str, prompt_user: str) -> dict:
-    if not _openai_client:
-        return {}
+def visual_analysis(path: str):
+    MAX_FRAMES = int(os.getenv("MAX_FRAMES_TO_CHECK", 60))
     try:
-        rsp = _openai_client.chat.completions.create(
-            model=CHAT_MODEL,
-            response_format={"type": "json_object"},
-            temperature=0.4,
-            timeout=45,
-            messages=[
-                {"role": "system", "content": prompt_system},
-                {"role": "user", "content": prompt_user}
-            ],
-        )
-        return json.loads(rsp.choices[0].message.content)
-    except Exception:
-        return {}
+        cap = cv2.VideoCapture(path)
+        if not cap.isOpened():
+            return "⚠️ No se pudo abrir video.", "Error video", "N/A"
+        frontal = total = 0
+        face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+        for _ in range(MAX_FRAMES):
+            ok, frame = cap.read()
+            if not ok:
+                break
+            total += 1
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            faces = face_cascade.detectMultiScale(gray, 1.3, 5)
+            if len(faces):
+                frontal += 1
+        cap.release()
+        if not total:
+            return "⚠️ Sin frames para analizar.", "Sin frames", "0.0%"
+        ratio = frontal / total
+        pct = f"{ratio*100:.1f}%"
+        if ratio >= 0.7:
+            return "✅ Buena presencia frente a cámara.", "Correcta", pct
+        if ratio > 0:
+            return "⚠️ Mejora la visibilidad.", "Mejorar visibilidad", pct
+        return "❌ No se detectó rostro.", "No detectado", pct
+    except Exception as e:
+        return f"⚠️ Error visual: {e}", "Error video", "N/A"
 
-# ───────────────────── Persistencia en BD ─────────────────────
+# ─────────── BD ───────────
 
 def get_db_connection():
     database_url = os.getenv("DATABASE_URL")
@@ -265,180 +305,201 @@ def get_db_connection():
         host=parsed.hostname, port=parsed.port, sslmode="require",
     )
 
-# ───────────────────── Visual (opcional) ─────────────────────
+# ─────────── Evaluador principal ───────────
 
-def visual_stub():
-    if not EVAL_ENABLE_VIDEO:
-        return ("⚠️ Sin video evaluado por configuración.", "Sin evaluación de video.", "N/A")
-    return ("⚠️ Evaluación de video no disponible.", "No evaluado", "N/A")
-
-# ───────────────────── Evaluación principal ─────────────────────
+def _validate_internal(internal: dict, user_text: str) -> dict:
+    """Blinda el JSON interno para el admin (si algo falló)."""
+    internal = internal or {}
+    internal.setdefault("da_vinci_points", score_davinci_points(user_text))
+    internal.setdefault("knowledge_score_legacy", f"{kw_score(user_text)}/8")
+    internal.setdefault("knowledge_score_legacy_num", kw_score(user_text))
+    internal.setdefault("product_claims", {"detail": {}, "product_score_total": 0})
+    internal.setdefault("interaction_quality", {})
+    if "kpis" not in internal:
+        internal["kpis"] = {
+            "avg_score": 0.0,
+            "avg_phase_score_1_3": 1.0,
+            "avg_steps_pct": 0.0,
+            "legacy_count": kw_score(user_text),
+        }
+    return internal
 
 def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str] = None) -> Dict[str, object]:
-    nt = canonicalize_products(normalize(user_text or ""))
-
-    # Señales y puntaje
-    sig = simple_signals(user_text or "")
-    score14, risk = score_and_risk(sig)
-    md_status = md_status_from_concepts(sig.get("concept_hits", {}))
-
-    # Visual (stub por defecto)
-    vis_pub, vis_int, vis_pct = visual_stub()
-
-    # --- PROMPTS (Usuario diplomático + RH directo)
-    SYSTEM = textwrap.dedent("""
-    Eres un coach-evaluador senior de la industria farmacéutica (Alfasigma) para presentaciones de ESOXX ONE.
-
-    IMPORTANTE SOBRE EL TRANSCRIPT:
-    • El texto puede contener LAS DOS VOCES MEZCLADAS o con etiquetas inconsistentes.
-    • NO concluyas que “no hubo interacción” solo porque falte un bloque rotulado del médico.
-    • Considera ruido de ASR: errores ortográficos, palabras partidas y nombres mal capturados.
-    • Evalúa por CONCEPTOS (apertura/descubrimiento, mecanismo, posología completa, evidencia trazable, sinergia con IBP, manejo de objeciones, cierre con acuerdo).
-
-    ESTILO Y RIESGO:
-    • Sé objetivo y no felicites si el score es bajo: si el riesgo es ALTO, sé directo.
-    • Evita inventar datos o porcentajes; si faltan, sugiere prácticas seguras.
-
-    FORMATO JSON EXACTO:
-    {
-      "public_summary": "<≤120 palabras, tono amable/motivador para el usuario>",
-      "rh": {
-        "strengths": ["...", "..."],           // 2–4 fortalezas factuales
-        "opportunities": ["...", "..."],       // 3–5 oportunidades concretas (posología completa, evidencia trazable, evitar absolutos, etc.)
-        "coaching_3": ["...", "...", "..."],   // exactamente 3 bullets accionables
-        "guide_phrase": "<1 línea clínica guía sobre ESOXX ONE>",
-        "kpis_next": ["...", "..."]            // 2–4 KPIs medibles para la próxima visita
-      }
-    }
-    """).strip()
-
-    # Prepara contexto para el LLM (sin inventar, usa señales detectadas)
-    context = {
-        "score": score14,
-        "risk": risk,
-        "input_confidence": sig.get("input_confidence"),
-        "concepts_present": list(sig.get("concept_hits", {}).keys()),
-        "red_flags": sig.get("red_flags"),
-        "da_vinci_status": md_status
-    }
-
-    USER = textwrap.dedent(f"""
-    TRANSCRIPCIÓN (puede estar mezclada/ruidosa):
-    {user_text or "[vacío]"}
-
-    CONTEXTO (no inventes):
-    {json.dumps(context, ensure_ascii=False)}
-
-    INSTRUCCIONES:
-    1) "public_summary": ≤120 palabras, tono amable y motivador para el usuario.
-    2) "rh": escribe:
-       - "strengths": 2-4 fortalezas factuales.
-       - "opportunities": 3-5 oportunidades específicas (evita absolutos, exige posología completa, pide evidencia trazable).
-       - "coaching_3": exactamente 3 bullets accionables.
-       - "guide_phrase": una frase clínica guía (1 línea) sobre ESOXX ONE.
-       - "kpis_next": 2-4 KPIs concretos para la próxima visita.
-    No inventes datos; si falta info, sugiere prácticas seguras.
-    """)
-
-    gpt = chat_json(SYSTEM, USER)
-
-    # Fallbacks si no hay LLM o contenido insuficiente
-    public_summary = (
-        gpt.get("public_summary")
-        if isinstance(gpt, dict) and gpt.get("public_summary")
-        else "Gracias por entrenar con Leo. Refuerza evidencia y posología completa; cierra con un siguiente paso acordado."
+    # Visual
+    vis_pub, vis_int, vis_pct = (
+        visual_analysis(video_path)
+        if video_path and cv2 and os.path.exists(video_path)
+        else ("⚠️ Sin video disponible.", "No evaluado", "N/A")
     )
 
-    rh = gpt.get("rh") if isinstance(gpt, dict) else {}
-    strengths     = rh.get("strengths")     or ["Trato cordial.", "Buena disposición al diálogo."]
-    opportunities = rh.get("opportunities") or ["Estructura Da Vinci incompleta.", "Posología no declarada con precisión.", "Falta evidencia trazable."]
-    coaching_3    = rh.get("coaching_3")    or [
-        "Decir posología completa: 1 stick post-comida + 1 antes de dormir; esperar 30–60 min.",
-        "Sustituir absolutos por lenguaje clínico moderado.",
-        "Citar un estudio con autor/año y resultado principal."
+    # Señales Da Vinci (% aplicado)
+    PHRASE_MAP = {
+        "preparacion": ["objetivo de la visita", "propósito de la visita", "mensaje clave", "smart", "objetivo smart", "mi objetivo hoy es", "plan para hoy", "materiales"],
+        "apertura": ["buenos dias", "buen dia", "hola doctora", "como ha estado", "pacientes", "necesidades", "visita anterior", "principal preocupacion", "que le preocupa", "que caracteristicas tienen"],
+        "persuasion": ["objetivos de tratamiento", "beneficio", "mecanismo", "estudio", "evidencia", "caracteristicas del producto", "combinado con ibp", "inhibidores de la bomba de protones"],
+        "cierre": ["siguiente paso", "podemos acordar", "cuento con usted", "puedo contar con", "le parece si", "empezar a considerar"],
+        "analisis_post": ["auto-evaluacion", "objeciones", "proxima visita", "actualiza", "que aprendi"],
+    }
+    def step_flag(step_kw: List[str]) -> bool:
+        nt = canonicalize_products(normalize(user_text))
+        return any(fuzzy_contains(nt, p, 0.80) for p in step_kw)
+
+    sales_model_flags = {step: step_flag(kws) for step, kws in PHRASE_MAP.items()}
+    steps_applied_count = sum(sales_model_flags.values())
+    steps_applied_pct = round(100.0 * steps_applied_count / 5.0, 1)
+
+    # Puntuaciones propias
+    weighted   = score_weighted_phrases(user_text)
+    davinci_pts = score_davinci_points(user_text)
+    legacy_8   = kw_score(user_text)
+
+    # Calidad + producto
+    iq = interaction_quality(user_text)
+    prod_detail, prod_total = product_compliance(user_text)
+
+    # Señal de bajo diálogo
+    nt = normalize(user_text)
+    min_tokens = 25
+    min_signals = (iq["question_rate"] > 0.15) or (steps_applied_count >= 2)
+    low_dialogue_note = (len(nt.split()) < min_tokens) or not min_signals
+
+    # GPT (resumen + valoración cualitativa)
+    try:
+        SYSTEM_PROMPT = textwrap.dedent("""
+        Actúa como coach-evaluador senior de la industria farmacéutica (Alfasigma).
+        El representante presenta ESOXX ONE (puede aparecer como 'esoxx-one' por normalización).
+        Evalúa por fases del Modelo Da Vinci y la calidad de la presentación
+        (claridad, foco clínico, evidencia, posología, manejo de dudas), SOLO con el texto dado.
+        Responde en JSON EXACTO con el FORMATO.
+        """)
+        FORMAT_GUIDE = textwrap.dedent("""
+        {
+          "public_summary": "<máx 120 palabras, tono amable y motivador>",
+          "internal_analysis": {
+            "overall_evaluation": "<2-3 frases objetivas para capacitación>",
+            "Modelo_DaVinci": {
+              "preparacion": "Excelente | Bien | Necesita Mejora",
+              "apertura": "Excelente | Bien | Necesita Mejora",
+              "persuasion": "Excelente | Bien | Necesita Mejora",
+              "cierre": "Excelente | Bien | Necesita Mejora",
+              "analisis_post": "Excelente | Bien | Necesita Mejora"
+            }
+          }
+        }
+        """)
+        convo = f"--- Participante (representante) ---\n{user_text}\n--- Médico (Leo) ---\n{leo_text or '(no disponible)'}"
+        completion = client.chat.completions.create(
+            model=os.getenv("OPENAI_GPT_MODEL", "gpt-4o-mini"),
+            response_format={"type": "json_object"},
+            timeout=40,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT + FORMAT_GUIDE},
+                {"role": "user", "content": convo},
+            ],
+            temperature=0.4,
+        )
+        gpt_json     = json.loads(completion.choices[0].message.content)
+        gpt_public   = gpt_json.get("public_summary", "")
+        gpt_internal = gpt_json.get("internal_analysis", {})
+        level = "alto"
+    except Exception:
+        gpt_public = ("Buen esfuerzo. Refuerza la estructura Da Vinci, usa evidencia clínica concreta de ESOXX ONE "
+                      "y cierra con un siguiente paso claro; practica manejo de objeciones.")
+        gpt_internal = {
+            "overall_evaluation": "Evaluación limitada por conectividad; se generan métricas internas objetivas.",
+            "Modelo_DaVinci": {
+                "preparacion": "Necesita Mejora",
+                "apertura": "Necesita Mejora",
+                "persuasion": "Necesita Mejora",
+                "cierre": "Necesita Mejora",
+                "analisis_post": "Necesita Mejora",
+            }
+        }
+        level = "error"
+
+    # KPI promedio (1–3 a 0–10)
+    MAP_Q2N = {"Excelente": 3, "Bien": 2, "Necesita Mejora": 1}
+    md = gpt_internal.get("Modelo_DaVinci", {}) or {}
+    md_scores = [
+        MAP_Q2N.get(md.get("preparacion",   "Necesita Mejora"), 1),
+        MAP_Q2N.get(md.get("apertura",      "Necesita Mejora"), 1),
+        MAP_Q2N.get(md.get("persuasion",    "Necesita Mejora"), 1),
+        MAP_Q2N.get(md.get("cierre",        "Necesita Mejora"), 1),
+        MAP_Q2N.get(md.get("analisis_post", "Necesita Mejora"), 1),
     ]
-    guide_phrase  = rh.get("guide_phrase")  or "ESOXX ONE: barrera bioadhesiva tópica; protege mucosa y complementa IBP con posología clara."
-    kpis_next     = rh.get("kpis_next")     or ["% pacientes con alivio temprano", "Adherencia a ventana 30–60 min", "Uso combinado con IBP"]
-
-    # Tarjeta RH en el formato solicitado
-    now_iso = os.getenv("NOW_ISO_OVERRIDE") or ""
-    rh_card_text = textwrap.dedent(f"""
-    Sesión: {now_iso or "—"} · Score: {score14}/14 · Riesgo: {risk}
-    Fortalezas: {("; ".join(strengths)).rstrip('.')}
-    Oportunidades clave: {("; ".join(opportunities)).rstrip('.')}
-    Coaching inmediato (3):
-    - {coaching_3[0]}
-    - {coaching_3[1]}
-    - {coaching_3[2]}
-    Frase guía sugerida:
-    {guide_phrase}
-    KPI próxima visita: {("; ".join(kpis_next)).rstrip('.')}
-    Confianza del análisis (calidad de transcripción): {sig.get("input_confidence")}
-    """).strip()
-
-    # Bloque público breve (con recordatorio amable)
-    public_block = textwrap.dedent(f"""
-    {public_summary}
-
-    {vis_pub}
-
-    Áreas sugeridas:
-    • Apoya con evidencia trazable y posología concreta.
-    • Cierra con un siguiente paso acordado.
-    • Refuerza preguntas y estructura.
-    """).strip()
+    avg_phase_score_1_3 = round(sum(md_scores) / 5.0, 2)
+    avg_score_0_10      = round((avg_phase_score_1_3 - 1) * (10 / 2), 1)
 
     internal_summary = {
-        # Texto completo para mostrar en Admin (RH)
-        "rh_card_text": rh_card_text,
+        "overall_training_summary": gpt_internal.get("overall_evaluation", ""),
+        "knowledge_score_legacy": f"{legacy_8}/8",
+        "knowledge_score_legacy_num": legacy_8,
+        "knowledge_weighted_total_points": weighted["total_points"],
+        "knowledge_weighted_breakdown": weighted["breakdown"],
 
-        # Métricas clave (sin “numeritis”)
-        "score14": score14,
-        "risk": risk,
-        "input_confidence": sig.get("input_confidence"),
-        "da_vinci_status": md_status,
+        "visual_presence": vis_int,
+        "visual_percentage": vis_pct,
 
-        # Para compatibilidad con vistas antiguas (si las usas)
-        "overall_training_summary": rh.get("overall_evaluation") or "Resumen enfocado a capacitación disponible en 'rh_card_text'.",
-        "gpt_detailed_feedback": {
-            "overall_evaluation": rh.get("overall_evaluation", ""),
-            "Modelo_DaVinci": {
-                "preparacion": md_status["preparacion"],
-                "apertura": md_status["apertura"],
-                "persuasion": md_status["persuasion"],
-                "cierre": md_status["cierre"],
-                "analisis_post": md_status["analisis_post"],
-            }
+        "da_vinci_step_flags": {
+            **{k: ("✅" if v else "❌") for k, v in sales_model_flags.items()},
+            "steps_applied_count": f"{steps_applied_count}/5",
+            "steps_applied_pct": steps_applied_pct,
         },
-        # Guardamos también los bulletes
-        "strengths": strengths,
-        "opportunities": opportunities,
-        "coaching_3": coaching_3,
-        "guide_phrase": guide_phrase,
-        "kpis_next": kpis_next,
+        "da_vinci_points": davinci_pts,
 
-        # Por si en el futuro quieres auditar conceptos detectados
-        "concept_hits": sig.get("concept_hits", {}),
-        "red_flags": sig.get("red_flags", {}),
+        "product_claims": {"detail": prod_detail, "product_score_total": prod_total},
+        "interaction_quality": iq,
+
+        "active_listening_simple_detection": iq["active_listening_level"],
+        "disqualifying_phrases_detected": disq_flag(user_text),
+
+        "gpt_detailed_feedback": {
+            "overall_evaluation": gpt_internal.get("overall_evaluation", ""),
+            "Modelo_DaVinci": md
+        },
+
+        "kpis": {
+            "avg_score": avg_score_0_10,
+            "avg_phase_score_1_3": avg_phase_score_1_3,
+            "avg_steps_pct": steps_applied_pct,
+            "legacy_count": legacy_8,
+        }
     }
 
-    return {"public": public_block, "internal": internal_summary, "level": "ok"}
+    # Público (diplomático)
+    extra_line = "• Refuerza preguntas y estructura." if low_dialogue_note else "• Mantén la estructura y refuerza evidencias."
+    public_block = textwrap.dedent(f"""
+        {gpt_public}
 
-# ───────────────────── Persistencia (evaluate_and_persist) ─────────────────────
+        {vis_pub}
+
+        Áreas sugeridas:
+        • Apoya la explicación de ESOXX ONE con evidencia y posología concreta.
+        • Cierra con un siguiente paso acordado.
+        {extra_line}
+    """).strip()
+
+    # Blindaje de esquema
+    internal_summary = _validate_internal(internal_summary, user_text)
+
+    return {"public": public_block, "internal": internal_summary, "level": level}
+
+# ─────────── Persistencia ───────────
 
 def evaluate_and_persist(session_id: int, user_text: str, leo_text: str, video_path: Optional[str] = None) -> Dict[str, object]:
     result = evaluate_interaction(user_text, leo_text, video_path)
+    internal = _validate_internal(result.get("internal"), user_text)
+
     conn = None
     try:
         conn = get_db_connection()
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE interactions SET evaluation_rh = %s WHERE id = %s",
-                (json.dumps(result.get("internal", {}), ensure_ascii=False), int(session_id))
+                (json.dumps(internal), int(session_id))
             )
         conn.commit()
     except Exception:
-        # No abortamos; devolvemos public igualmente
         result["level"] = "error"
         result["public"] += "\n\n⚠️ No se pudo registrar el análisis en BD."
     finally:
