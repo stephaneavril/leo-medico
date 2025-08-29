@@ -1,14 +1,34 @@
-# evaluator.py
-# -------------------------------------------------------------------
-# Analiza una simulación Representante ↔ Médico (texto + video opc.)
-# Guarda SIEMPRE métricas en BD cuando se llama vía evaluate_and_persist().
-# Retorna: {"public": str, "internal": dict, "level": "alto"|"error"}
-# -------------------------------------------------------------------
-import os, json, textwrap, unicodedata, re, difflib
+# evaluator.py — Transcript-first, salida compacta para RH + resumen diplomático para usuario
+# -----------------------------------------------------------------------------
+# Retorna:
+#   {
+#     "public": "<resumen amable (usuario)>",
+#     "internal": {
+#        ... (métricas existentes para no romper Admin) ...
+#        "compact": {
+#           "session": {"id": <int>, "name": "<str|None>", "email": "<str|None>", "timestamp": "<iso|None>"},
+#           "score_14": <int>,
+#           "risk": "ALTO|MEDIO|BAJO",
+#           "strengths": [str, ...],
+#           "opportunities": [str, ...],
+#           "coaching_3": [str, str, str],
+#           "frase_guia": "<str>",
+#           "kpis": [str, str, str],
+#           "rh_text": "<bloque listo para pegar>",
+#           "user_text": "<versión amable>"
+#        }
+#     },
+#     "level": "alto|error"
+#   }
+# Guarda en BD: `evaluation_rh` (JSON) sin tocar `evaluation` (lo actualiza el worker).
+# -----------------------------------------------------------------------------
+
+from __future__ import annotations
+import os, json, textwrap, unicodedata, re, difflib, logging
 from typing import Optional, Dict, List, Tuple
 from urllib.parse import urlparse
 
-# OpenCV opcional (presencia en video)
+# OpenCV es opcional
 try:
     import cv2
 except ImportError:
@@ -16,10 +36,19 @@ except ImportError:
 
 import psycopg2
 from openai import OpenAI
-from dotenv import load_dotenv
 
-load_dotenv()
+# ───────────────────────── Config ─────────────────────────
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY", ""))
+
+# Habilitar o no evaluación visual (por defecto DESACTIVADA)
+EVAL_ENABLE_VIDEO = os.getenv("EVAL_ENABLE_VIDEO", "0").lower() in ("1", "true", "yes")
+
+# Modelo GPT (ligero y barato por default)
+GPT_MODEL = os.getenv("OPENAI_GPT_MODEL", "gpt-4o-mini")
+
+# Logger sencillo
+logging.basicConfig(level=os.getenv("EVAL_LOG_LEVEL", "INFO").upper())
+log = logging.getLogger("evaluator")
 
 # ───────────────────────── Utils ─────────────────────────
 
@@ -37,7 +66,7 @@ def canonicalize_products(nt: str) -> str:
     variants = [
         r"\beso\s*xx\s*one\b", r"\besox+\s*one\b", r"\besoxx-one\b",
         r"\besof+\s*one\b", r"\becox+\s*one\b", r"\besox+\b", r"\besof+\b",
-        r"\becox+\b", r"\beso\s*xx\b", r"\besoft\s*one\b", r"\besoxxone\b",
+        r"\becox+\b", r"\beso\s*xx\b", r"\besoxxone\b",
         r"\bays?oks?\b", r"\bays?oks?\s*one\b", r"\besok+\b",
     ]
     canon = nt
@@ -61,145 +90,60 @@ def fuzzy_contains(haystack: str, needle: str, threshold: float = 0.82) -> bool:
 def count_fuzzy_any(nt: str, phrases: List[str], thr: float = 0.82) -> int:
     return sum(1 for p in phrases if fuzzy_contains(nt, p, thr))
 
-def env_bool(key: str, default: bool = False) -> bool:
-    val = os.getenv(key)
-    if val is None:
-        return default
-    return val.strip().lower() in {"1", "true", "yes", "on"}
-
-# ─────────── Scoring config (claims + Da Vinci) ───────────
+# ─────────── Scoring config (reutiliza tu lógica previa) ───────────
 
 WEIGHTED_KWS = {
     "3pt": [
-        "esoxx-one mejora hasta 90% todos los sintomas de la erge",
         "esoxx-one reduce hasta 90% la frecuencia y severidad de los sintomas de erge",
-        "esoxx-one demostro mejoria significativa de los sintomas esofagicos y extraesofagicos de la erge",
-        "esoxx-one mas ibp es significativamente mas eficaz que la monoterapia con ibp para la epitelizacion esofagica",
-        "reduce significativamente los sintomas de la erge vs monoterapia ibps",
         "alivio en menor tiempo (2 semanas vs 4 semanas)",
-        "reduccion del uso de antiacidos",
-        "demostrado en ninos y adolescentes",
         "reduce la falla al tratamiento",
+        "reduce significativamente los sintomas",
+        "reduccion del uso de antiacidos",
     ],
     "2pt": [
         "protege y repara mucosa esofagica",
-        "protege y promueve la reparacion de la mucosa esofagica",
         "barrera bioadhesiva",
         "combinacion de 3 activos",
         "acido hialuronico",
         "sulfato de condroitina",
         "poloxamero 407",
-        "recubre el epitelio esofagico",
-        "liquido a temperatura ambiente y en estado gel a temperatura corporal",
         "un sobre despues de cada comida y antes de dormir",
-        "esperar por lo menos 30min despues sin tomar alimentos o bebidas",
-        "esperar 60min",
-        "esperar 1hr",
+        "esperar 30", "esperar 60", "30-60",
     ],
     "1pt": [
-        "mecanismo de proteccion original e innovador para el manejo de la erge",
-        "alivia los sintomas del erge",
+        "mecanismo de proteccion",
+        "actua como barrera mecanica",
         "esoxx-one",
-        "forma un complejo macromolecular que recubre la mucosa esofagica",
-        "actua como barrera mecanica contra componentes nocivos del reflujo",
-        "mejora la calidad de vida de los pacientes",
-        "unico",
+        "mejora la calidad de vida",
     ],
 }
 
 DAVINCI_POINTS = {
-    "preparacion": {
-        2: ["objetivo smart", "mi objetivo hoy es", "metas smart"],
-        1: [
-            "objetivo de la visita", "propósito de la visita", "mensaje clave",
-            "hoy quiero", "plan para hoy", "materiales", "presentacion preparada"
-        ],
-    },
-    "apertura": {
-        2: [
-            "cuales son las mayores preocupaciones", "principal preocupacion",
-            "que caracteristicas tienen sus pacientes", "visita anterior",
-            "me gustaria conocer", "que es lo que mas le preocupa"
-        ],
-        1: [
-            "buenos dias", "buen dia", "hola doctora", "mi nombre es",
-            "como ha estado", "gracias por su tiempo"
-        ],
-    },
-    "persuasion": {
-        2: [
-            "que caracteristicas considera ideales", "objetivos de tratamiento",
-            "combinado con ibp", "sinergia con inhibidores de la bomba de protones",
-            "mecanismo", "beneficio", "evidencia", "estudio",
-            "tres componentes", "acido hialuronico", "condroitin", "poloxamero",
-        ]
-    },
-    "cierre": {
-        2: [
-            "con base a lo dialogado considera que esoxx-one", "podria empezar con algun paciente",
-            "le parece si iniciamos", "empezar a considerar algun paciente",
-            "podemos acordar un siguiente paso", "puedo contar con su apoyo",
-        ],
-        1: ["siguiente paso", "podemos acordar", "puedo contar con", "le parece si"],
-    },
-    "analisis_post": {
-        2: ["auto-evaluacion", "plan para proxima visita", "que mejoraria para la proxima"],
-        1: ["objeciones", "proxima visita", "actualiza", "que aprendi"],
-    },
+    "preparacion": {2: ["objetivo smart", "mi objetivo hoy es", "mensaje clave"], 1: ["objetivo de la visita", "plan para hoy"]},
+    "apertura":    {2: ["cuales son las mayores preocupaciones", "que caracteristicas tienen sus pacientes"], 1: ["hola doctora", "gracias por su tiempo"]},
+    "persuasion":  {2: ["beneficio", "mecanismo", "evidencia", "estudio", "combinado con ibp"],},
+    "cierre":      {2: ["siguiente paso", "puedo contar con", "le parece si"], 1: ["acordar un siguiente paso"]},
+    "analisis_post": {1: ["auto-evaluacion", "proxima visita", "que aprendi"]},
 }
 
 KW_LIST = ["beneficio", "estudio", "sintoma", "tratamiento", "reflujo", "mecanismo", "eficacia", "seguridad"]
 BAD_PHRASES = ["no se", "no tengo idea", "lo invento", "no lo estudie", "no estudie bien", "no conozco", "no me acuerdo"]
+
 LISTEN_KW  = [
     "entiendo", "comprendo", "veo que", "lo que dices", "si entiendo bien", "parafraseando",
     "que le preocupa", "me gustaria conocer", "que caracteristicas tienen", "podria contarme", "como describe a sus pacientes"
 ]
 
-# Rúbrica de producto ampliada (más cercana a tu pitch real)
 PRODUCT_RUBRIC: Dict[str, Dict[str, List[str] | int]] = {
-    "mecanismo": {
-        "weight": 2,
-        "phrases": [
-            "barrera bioadhesiva", "recubre el epitelio esofagico", "actua como barrera mecanica",
-            "poloxamero 407", "acido hialuronico", "sulfato de condroitina", "tres componentes",
-            "dispositivo medico", "sin interacciones con medicamentos", "actua en el esofago",
-        ],
-    },
-    "eficacia": {
-        "weight": 3,
-        "phrases": [
-            "mejora hasta 90% todos los sintomas", "reduce hasta 90% la frecuencia y severidad",
-            "alivio en menor tiempo", "reduce la falla al tratamiento", "reduce significativamente los sintomas",
-            "sinergia con inhibidores de la bomba de protones", "ibp mas esoxx-one",
-        ],
-    },
-    "evidencia": {
-        "weight": 2,
-        "phrases": [
-            "demostrado en ninos y adolescentes", "estudio", "evidencia", "mejoria significativa",
-            "reduccion del uso de antiacidos", "epitelizacion esofagica",
-        ],
-    },
-    "uso_posologia": {
-        "weight": 2,
-        "phrases": [
-            "un sobre despues de cada comida y antes de dormir",
-            "esperar por lo menos 30min", "esperar 60min", "esperar 1hr",
-            "liquido a temperatura ambiente y en estado gel a temperatura corporal",
-            "formar un gel en el esofago",
-        ],
-    },
-    "diferenciales": {
-        "weight": 1,
-        "phrases": [
-            "combinacion de 3 activos", "mecanismo de proteccion original", "unico",
-            "mejora la calidad de vida", "sin eventos adversos", "no se absorbe sistemicamente",
-        ],
-    },
-    "mensajes_base": {"weight": 1, "phrases": ["esoxx-one", "reflujo", "erge", "sintomas"]},
+    "mecanismo": {"weight": 2, "phrases": ["barrera bioadhesiva", "recubre el epitelio esofagico", "poloxamero 407", "acido hialuronico", "sulfato de condroitina"]},
+    "eficacia": {"weight": 3, "phrases": ["alivio en menor tiempo", "reduce significativamente", "sinergia con inhibidores de la bomba de protones", "ibp mas esoxx-one"]},
+    "evidencia": {"weight": 2, "phrases": ["estudio", "evidencia", "mejoria significativa", "reflujo nocturno"]},
+    "uso_posologia": {"weight": 2, "phrases": ["un sobre despues de cada comida y antes de dormir", "30", "60", "agitar"]},
+    "diferenciales": {"weight": 1, "phrases": ["no se absorbe", "bien tolerado", "dispositivo medico"]},
+    "mensajes_base": {"weight": 1, "phrases": ["esoxx-one", "reflujo", "erge"]},
 }
 
-# ─────────── Scorers ───────────
+# ─────────── Scorers básicos ───────────
 
 def score_weighted_phrases(t: str) -> Dict[str, object]:
     nt = canonicalize_products(normalize(t))
@@ -265,26 +209,17 @@ def interaction_quality(t: str) -> Dict[str, object]:
         "active_listening_level": listen_level,
     }
 
-# ─────────── Visual express ───────────
+# ─────────── Visual opcional ───────────
 
 def visual_analysis(path: str):
-    """
-    Devuelve 4 valores:
-    (pub_msg: str, internal_tag: str, pct_str: str, ratio_float: float)
-    """
+    """Devuelve (pub_msg, int_msg, pct_num, ratio_num)."""
+    if not (path and cv2 and os.path.exists(path)):
+        return "⚠️ Sin video evaluado por configuración.", "Sin evaluación de video.", 0.0, 0.0
     try:
         MAX_FRAMES = int(os.getenv("MAX_FRAMES_TO_CHECK", 60))
-    except Exception:
-        MAX_FRAMES = 60
-
-    try:
-        if not cv2 or not path or not os.path.exists(path):
-            return "⚠️ Sin video disponible.", "No evaluado", "N/A", 0.0
-
         cap = cv2.VideoCapture(path)
         if not cap.isOpened():
-            return "⚠️ No se pudo abrir video.", "Error video", "N/A", 0.0
-
+            return "⚠️ No se pudo abrir video.", "Error video", 0.0, 0.0
         frontal = total = 0
         face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
         for _ in range(MAX_FRAMES):
@@ -297,19 +232,17 @@ def visual_analysis(path: str):
             if len(faces):
                 frontal += 1
         cap.release()
-
         if not total:
-            return "⚠️ Sin frames para analizar.", "Sin frames", "0.0%", 0.0
-
+            return "⚠️ Sin frames para analizar.", "Sin frames", 0.0, 0.0
         ratio = frontal / total
-        pct_str = f"{ratio*100:.1f}%"
+        pct = ratio * 100.0
         if ratio >= 0.7:
-            return "✅ Buena presencia frente a cámara.", "Correcta", pct_str, ratio
+            return "✅ Buena presencia frente a cámara.", "Correcta", pct, ratio
         if ratio > 0:
-            return "⚠️ Mejora la visibilidad.", "Mejorar visibilidad", pct_str, ratio
-        return "❌ No se detectó rostro.", "No detectado", pct_str, ratio
+            return "⚠️ Mejora la visibilidad.", "Mejorar visibilidad", pct, ratio
+        return "❌ No se detectó rostro.", "No detectado", 0.0, 0.0
     except Exception as e:
-        return f"⚠️ Error visual: {e}", "Error video", "N/A", 0.0
+        return f"⚠️ Error visual: {e}", "Error video", 0.0, 0.0
 
 # ─────────── BD ───────────
 
@@ -323,11 +256,145 @@ def get_db_connection():
         host=parsed.hostname, port=parsed.port, sslmode="require",
     )
 
-# ─────────── Evaluador principal ───────────
+def _get_session_info(session_id: int) -> dict:
+    out = {"id": int(session_id), "name": None, "email": None, "timestamp": None, "scenario": None}
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("SELECT name, email, timestamp, scenario FROM interactions WHERE id=%s;", (int(session_id),))
+            row = cur.fetchone()
+        conn.close()
+        if row:
+            out["name"], out["email"], out["timestamp"], out["scenario"] = row
+    except Exception as e:
+        log.warning("No se pudo leer session info (%s): %s", session_id, e)
+    return out
+
+# ─────────── Ensamblado de salida compacta ───────────
+
+POSO_PATTERNS = [
+    "un sobre despues de cada comida y antes de dormir",
+    "despues de cada comida", "antes de dormir", "30-60", "30 min", "60 min", "agitar"
+]
+EVID_PATTERNS = ["estudio", "evidencia", "savarino", "n=", "random", "p<", "significativa"]
+NOCT_PATTERNS = ["nocturn", "noche", "sintomas nocturnos"]
+IBP_PATTERNS  = ["ibp", "inhibidores de la bomba de protones", "omeprazol", "esomeprazol"]
+
+ABSOLUTE_FLAGS_HI = [
+    "90%", "noventa por ciento", "100%", "cualquier paciente", "para todos",
+    "totalmente seguro", "no tiene efectos secundarios", "sin interacciones"
+]
+ABSOLUTE_FLAGS_MED = ["unico", "inmediato", "desde la primera toma", "garantiza"]
+
+def _bool_hit(nt: str, pats: List[str], thr: float = 0.80) -> bool:
+    return any(fuzzy_contains(nt, p, thr) for p in pats)
+
+def _risk_level(nt: str) -> str:
+    if _bool_hit(nt, ABSOLUTE_FLAGS_HI, 0.88):
+        return "ALTO"
+    if _bool_hit(nt, ABSOLUTE_FLAGS_MED, 0.86):
+        return "MEDIO"
+    return "BAJO"
+
+def _phase_grade_to_points(grade: str) -> int:
+    # Excelente=2, Bien=1, Necesita Mejora=0
+    g = (grade or "").strip().lower()
+    if g.startswith("excel"): return 2
+    if g.startswith("bien"): return 1
+    return 0
+
+def _make_compact_brief(session_id: int, user_text: str, md_labels: dict, iq: dict) -> dict:
+    nt = canonicalize_products(normalize(user_text))
+
+    # Señales clave
+    has_poso = _bool_hit(nt, POSO_PATTERNS)
+    has_evid = _bool_hit(nt, EVID_PATTERNS)
+    has_close = bool(iq.get("closing_present"))
+    mentions_noct = _bool_hit(nt, NOCT_PATTERNS)
+    mentions_ibp = _bool_hit(nt, IBP_PATTERNS)
+    risk = _risk_level(nt)
+
+    # Score 14 = 5 fases * (0–2) + posología(1) + evidencia(1) + cierre(1)
+    phase_points = sum(_phase_grade_to_points(md_labels.get(k, "Necesita Mejora"))
+                       for k in ["preparacion", "apertura", "persuasion", "cierre", "analisis_post"])
+    score_14 = int(phase_points + (1 if has_poso else 0) + (1 if has_evid else 0) + (1 if has_close else 0))
+    score_14 = max(0, min(14, score_14))
+
+    # Fortalezas / Oportunidades
+    strengths = []
+    if mentions_noct: strengths.append("Conecta con reflujo nocturno (relevancia clínica).")
+    if mentions_ibp:  strengths.append("Integra sinergia con IBP de forma adecuada.")
+    if has_poso:      strengths.append("Explica posología correctamente (stick post-comida + nocturno; 30–60 min).")
+    if iq.get("active_listening_level") in ("Alta", "Moderada"):
+        strengths.append(f"Escucha activa {iq['active_listening_level'].lower()}.")
+
+    opportunities = []
+    if not has_evid:  opportunities.append("Aterrizar evidencias con dato breve (autor/año, n, resultado).")
+    if not has_close: opportunities.append("Cerrar con un siguiente paso medible (p.ej., 2 casos y fecha de revisión).")
+    if iq.get("active_listening_level") == "Baja":
+        opportunities.append("Incrementar preguntas de descubrimiento y parafraseo.")
+    # Evita mencionar pronunciación del producto (pedido explícito del cliente)
+
+    # Coaching (3)
+    coaching_3 = [
+        "Practicar pitch breve: mecanismo + posología + evidencia (30–45 s).",
+        ("Reforzar ejemplos de paciente con reflujo nocturno y uso adyuvante con IBP."
+         if mentions_noct else
+         "Agregar ejemplo concreto de reflujo nocturno con uso adyuvante con IBP."),
+        "Preparar cierre con propuesta de seguimiento (2 pacientes; control en 2 semanas)."
+    ]
+
+    # Frase guía
+    frase = ("“ESOXX ONE: protege mucosa y mejora sueño en reflujo nocturno; "
+             "con IBP acelera respuesta (2 vs 4 semanas) y favorece adherencia.”")
+
+    # KPIs sugeridos
+    kpis = [
+        "% pacientes con mejoría nocturna reportada",
+        "Reducción de falla terapéutica vs monoterapia",
+        "Apego a posología (1 post-comida + 1 nocturno; 30–60 min sin ingerir)",
+    ]
+
+    # Encabezado con mínimos datos de sesión
+    sess = _get_session_info(session_id)
+    encabezado = f"Sesión: {sess.get('timestamp') or 'N/D'} · Score: {score_14}/14 · Riesgo: {risk}"
+
+    rh_text = textwrap.dedent(f"""\
+        {encabezado}
+        Fortalezas: {("; ".join(strengths) or "—")}
+        Oportunidades: {("; ".join(opportunities) or "—")}
+        Coaching (3): {("; ".join(coaching_3))}
+        Frase guía: {frase}
+        KPI: {("; ".join(kpis))}
+    """).strip()
+
+    # Versión amable (usuario)
+    user_text_block = textwrap.dedent("""\
+        ¡Gracias por tu tiempo! Tu explicación de ESOXX ONE va por buen camino. 
+        Te sugerimos reforzar brevemente la evidencia clínica y dejar un siguiente paso concreto 
+        (por ejemplo, iniciar en 1–2 pacientes con reflujo nocturno). Recuerda la posología: 
+        1 stick después de cada comida y 1 antes de dormir, manteniendo 30–60 minutos sin ingerir alimentos o bebidas. 
+        Estamos aquí para acompañarte en lo que necesites.
+    """).strip()
+
+    return {
+        "session": {"id": sess["id"], "name": sess["name"], "email": sess["email"], "timestamp": sess["timestamp"]},
+        "score_14": score_14,
+        "risk": risk,
+        "strengths": strengths,
+        "opportunities": opportunities,
+        "coaching_3": coaching_3[:3],
+        "frase_guia": frase,
+        "kpis": kpis,
+        "rh_text": rh_text,
+        "user_text": user_text_block,
+    }
+
+# ─────────── Blindaje y defaults ───────────
 
 def _validate_internal(internal: dict, user_text: str) -> dict:
-    """Blinda el JSON interno para el admin (si algo falló)."""
     internal = internal or {}
+    # Campos legacy que tu Admin ya consume
     internal.setdefault("da_vinci_points", score_davinci_points(user_text))
     internal.setdefault("knowledge_score_legacy", f"{kw_score(user_text)}/8")
     internal.setdefault("knowledge_score_legacy_num", kw_score(user_text))
@@ -342,28 +409,22 @@ def _validate_internal(internal: dict, user_text: str) -> dict:
         }
     return internal
 
-def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str] = None) -> Dict[str, object]:
-    # ← Flag local (evita NameError aunque haya versiones viejas en memoria)
-    eval_video = env_bool("EVAL_ENABLE_VIDEO", False)
+# ─────────── Evaluador principal ───────────
 
-    # Visual
-    if eval_video and video_path and cv2 and os.path.exists(video_path):
+def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str] = None) -> Dict[str, object]:
+    # Visual (opcional por bandera)
+    if EVAL_ENABLE_VIDEO:
         vis_pub, vis_int, vis_pct, vis_ratio = visual_analysis(video_path)
     else:
-        vis_pub, vis_int, vis_pct, vis_ratio = (
-            "⚠️ Sin video evaluado por configuración.",
-            "Sin evaluación de video.",
-            "N/A",
-            0.0,
-        )
+        vis_pub, vis_int, vis_pct, vis_ratio = ('⚠️ Sin video evaluado por configuración.', 'Sin evaluación de video.', 0.0, 0.0)
 
-    # Señales Da Vinci (% aplicado)
+    # Flags de pasos para KPI simple
     PHRASE_MAP = {
-        "preparacion": ["objetivo de la visita", "propósito de la visita", "mensaje clave", "smart", "objetivo smart", "mi objetivo hoy es", "plan para hoy", "materiales"],
-        "apertura": ["buenos dias", "buen dia", "hola doctora", "como ha estado", "pacientes", "necesidades", "visita anterior", "principal preocupacion", "que le preocupa", "que caracteristicas tienen"],
-        "persuasion": ["objetivos de tratamiento", "beneficio", "mecanismo", "estudio", "evidencia", "caracteristicas del producto", "combinado con ibp", "inhibidores de la bomba de protones"],
-        "cierre": ["siguiente paso", "podemos acordar", "cuento con usted", "puedo contar con", "le parece si", "empezar a considerar"],
-        "analisis_post": ["auto-evaluacion", "objeciones", "proxima visita", "actualiza", "que aprendi"],
+        "preparacion": ["objetivo de la visita", "propósito de la visita", "mensaje clave", "smart"],
+        "apertura": ["buenos dias", "hola doctora", "principal preocupacion", "que le preocupa"],
+        "persuasion": ["beneficio", "mecanismo", "estudio", "evidencia", "ibp"],
+        "cierre": ["siguiente paso", "podemos acordar", "puedo contar con", "le parece si"],
+        "analisis_post": ["auto-evaluacion", "proxima visita", "que aprendi"],
     }
     def step_flag(step_kw: List[str]) -> bool:
         nt = canonicalize_products(normalize(user_text))
@@ -374,62 +435,54 @@ def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str
     steps_applied_pct = round(100.0 * steps_applied_count / 5.0, 1)
 
     # Puntuaciones propias
-    weighted    = score_weighted_phrases(user_text)
+    weighted   = score_weighted_phrases(user_text)
     davinci_pts = score_davinci_points(user_text)
-    legacy_8    = kw_score(user_text)
+    legacy_8   = kw_score(user_text)
 
     # Calidad + producto
     iq = interaction_quality(user_text)
     prod_detail, prod_total = product_compliance(user_text)
 
-    # Señal de bajo diálogo
-    nt = normalize(user_text)
-    min_tokens = 25
-    min_signals = (iq["question_rate"] > 0.15) or (steps_applied_count >= 2)
-    low_dialogue_note = (len(nt.split()) < min_tokens) or not min_signals
-
-    # GPT (resumen + valoración cualitativa)
+    # GPT (resumen + etiquetas de fases)
     try:
         SYSTEM_PROMPT = textwrap.dedent("""
         Actúa como coach-evaluador senior de la industria farmacéutica (Alfasigma).
-        El representante presenta ESOXX ONE (puede aparecer como 'esoxx-one' por normalización).
-        Evalúa por fases del Modelo Da Vinci y la calidad de la presentación
-        (claridad, foco clínico, evidencia, posología, manejo de dudas), SOLO con el texto dado.
-        Responde en JSON EXACTO con el FORMATO.
-        """)
-        FORMAT_GUIDE = textwrap.dedent("""
+        Evalúa SOLO el texto transcrito. Clasifica cada fase del Modelo Da Vinci como
+        "Excelente", "Bien" o "Necesita Mejora". Entrega JSON ESTRICTO con este formato:
         {
           "public_summary": "<máx 120 palabras, tono amable y motivador>",
           "internal_analysis": {
             "overall_evaluation": "<2-3 frases objetivas para capacitación>",
             "Modelo_DaVinci": {
-              "preparacion": "Excelente | Bien | Necesita Mejora",
-              "apertura": "Excelente | Bien | Necesita Mejora",
-              "persuasion": "Excelente | Bien | Necesita Mejora",
-              "cierre": "Excelente | Bien | Necesita Mejora",
-              "analisis_post": "Excelente | Bien | Necesita Mejora"
+              "preparacion": "Excelente|Bien|Necesita Mejora",
+              "apertura": "Excelente|Bien|Necesita Mejora",
+              "persuasion": "Excelente|Bien|Necesita Mejora",
+              "cierre": "Excelente|Bien|Necesita Mejora",
+              "analisis_post": "Excelente|Bien|Necesita Mejora"
             }
           }
         }
-        """)
-        convo = f"--- Participante (representante) ---\n{user_text}\n--- Médico (Leo) ---\n{leo_text or '(no disponible)'}"
+        """).strip()
+        convo = f"--- Participante ---\n{user_text}\n--- Médico (Leo) ---\n{leo_text or '(no disponible)'}"
         completion = client.chat.completions.create(
-            model=os.getenv("OPENAI_GPT_MODEL", "gpt-4o-mini"),
+            model=GPT_MODEL,
             response_format={"type": "json_object"},
             timeout=40,
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT + FORMAT_GUIDE},
+                {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": convo},
             ],
             temperature=0.4,
         )
-        gpt_json     = json.loads(completion.choices[0].message.content)
+        gpt_json     = json.loads(completion.choices[0].message.content or "{}")
         gpt_public   = gpt_json.get("public_summary", "")
-        gpt_internal = gpt_json.get("internal_analysis", {})
+        gpt_internal = gpt_json.get("internal_analysis", {}) or {}
+        md_labels    = gpt_internal.get("Modelo_DaVinci", {}) or {}
         level = "alto"
-    except Exception:
-        gpt_public = ("Buen esfuerzo. Refuerza la estructura Da Vinci, usa evidencia clínica concreta de ESOXX ONE "
-                      "y cierra con un siguiente paso claro; practica manejo de objeciones.")
+    except Exception as e:
+        log.warning("GPT fallback por error: %s", e)
+        gpt_public = ("Gracias por la presentación. Refuerza la estructura Da Vinci, usa evidencia clínica puntual "
+                      "y cierra con un siguiente paso claro; práctica enfocada en reflujo nocturno.")
         gpt_internal = {
             "overall_evaluation": "Evaluación limitada por conectividad; se generan métricas internas objetivas.",
             "Modelo_DaVinci": {
@@ -440,21 +493,19 @@ def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str
                 "analisis_post": "Necesita Mejora",
             }
         }
+        md_labels = gpt_internal["Modelo_DaVinci"]
         level = "error"
 
-    # KPI promedio (1–3 a 0–10)
+    # KPI promedio (1–3 → 0–10)
     MAP_Q2N = {"Excelente": 3, "Bien": 2, "Necesita Mejora": 1}
-    md = gpt_internal.get("Modelo_DaVinci", {}) or {}
-    md_scores = [
-        MAP_Q2N.get(md.get("preparacion",   "Necesita Mejora"), 1),
-        MAP_Q2N.get(md.get("apertura",      "Necesita Mejora"), 1),
-        MAP_Q2N.get(md.get("persuasion",    "Necesita Mejora"), 1),
-        MAP_Q2N.get(md.get("cierre",        "Necesita Mejora"), 1),
-        MAP_Q2N.get(md.get("analisis_post", "Necesita Mejora"), 1),
-    ]
+    md_scores = [MAP_Q2N.get(md_labels.get(k, "Necesita Mejora"), 1) for k in ["preparacion","apertura","persuasion","cierre","analisis_post"]]
     avg_phase_score_1_3 = round(sum(md_scores) / 5.0, 2)
     avg_score_0_10      = round((avg_phase_score_1_3 - 1) * (10 / 2), 1)
 
+    # Compact brief (lo que RH quiere ver)
+    compact = _make_compact_brief(session_id=0, user_text=user_text, md_labels=md_labels, iq=iq)  # session_id real se setea en evaluate_and_persist
+
+    # Armado interno completo (mantiene legacy + añade compact)
     internal_summary = {
         "overall_training_summary": gpt_internal.get("overall_evaluation", ""),
         "knowledge_score_legacy": f"{legacy_8}/8",
@@ -480,7 +531,7 @@ def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str
 
         "gpt_detailed_feedback": {
             "overall_evaluation": gpt_internal.get("overall_evaluation", ""),
-            "Modelo_DaVinci": md
+            "Modelo_DaVinci": md_labels
         },
 
         "kpis": {
@@ -488,23 +539,18 @@ def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str
             "avg_phase_score_1_3": avg_phase_score_1_3,
             "avg_steps_pct": steps_applied_pct,
             "legacy_count": legacy_8,
-        }
+        },
+
+        # NUEVO bloque compacto para RH
+        "compact": compact
     }
 
-    # Público (diplomático)
-    extra_line = "• Refuerza preguntas y estructura." if low_dialogue_note else "• Mantén la estructura y refuerza evidencias."
+    # Público (diplomático) → usa la versión amable del compacto si existe
     public_block = textwrap.dedent(f"""
-        {gpt_public}
-
-        {vis_pub}
-
-        Áreas sugeridas:
-        • Apoya la explicación de ESOXX ONE con evidencia y posología concreta.
-        • Cierra con un siguiente paso acordado.
-        {extra_line}
+        {compact['user_text'] if compact and compact.get('user_text') else gpt_public}
     """).strip()
 
-    # Blindaje de esquema
+    # Blindaje de esquema por si algo se pierde
     internal_summary = _validate_internal(internal_summary, user_text)
 
     return {"public": public_block, "internal": internal_summary, "level": level}
@@ -512,8 +558,23 @@ def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str
 # ─────────── Persistencia ───────────
 
 def evaluate_and_persist(session_id: int, user_text: str, leo_text: str, video_path: Optional[str] = None) -> Dict[str, object]:
-    result = evaluate_interaction(user_text, leo_text, video_path)
-    internal = _validate_internal(result.get("internal"), user_text)
+    res = evaluate_interaction(user_text or "", leo_text or "", video_path)
+    internal = _validate_internal(res.get("internal"), user_text)
+
+    # Rellena datos de sesión en el bloque compacto (id, name, email, timestamp)
+    try:
+        sess = _get_session_info(session_id)
+        if "compact" in internal and isinstance(internal["compact"], dict):
+            internal["compact"]["session"] = {
+                "id": int(session_id),
+                "name": sess.get("name"),
+                "email": sess.get("email"),
+                "timestamp": sess.get("timestamp"),
+            }
+            # Reempaqueta encabezado con fecha si hiciera falta
+            # (el texto ya trae un encabezado; lo dejamos tal cual para no duplicar)
+    except Exception as e:
+        log.warning("No se pudo enriquecer compact.session: %s", e)
 
     conn = None
     try:
@@ -524,10 +585,11 @@ def evaluate_and_persist(session_id: int, user_text: str, leo_text: str, video_p
                 (json.dumps(internal), int(session_id))
             )
         conn.commit()
-    except Exception:
-        result["level"] = "error"
-        result["public"] += "\n\n⚠️ No se pudo registrar el análisis en BD."
+    except Exception as e:
+        res["level"] = "error"
+        res["public"] += "\n\n⚠️ No se pudo registrar el análisis en BD."
+        log.error("Persistencia evaluation_rh falló: %s", e)
     finally:
         if conn:
             conn.close()
-    return result
+    return res
