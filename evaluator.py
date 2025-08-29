@@ -21,9 +21,6 @@ from dotenv import load_dotenv
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY", ""))
 
-# Flag para activar/desactivar evaluación de video (por defecto OFF)
-EVAL_ENABLE_VIDEO = os.getenv("EVAL_ENABLE_VIDEO", "0").strip().lower() in {"1", "true", "yes", "on"}
-
 # ───────────────────────── Utils ─────────────────────────
 
 def normalize(txt: str) -> str:
@@ -63,6 +60,12 @@ def fuzzy_contains(haystack: str, needle: str, threshold: float = 0.82) -> bool:
 
 def count_fuzzy_any(nt: str, phrases: List[str], thr: float = 0.82) -> int:
     return sum(1 for p in phrases if fuzzy_contains(nt, p, thr))
+
+def env_bool(key: str, default: bool = False) -> bool:
+    val = os.getenv(key)
+    if val is None:
+        return default
+    return val.strip().lower() in {"1", "true", "yes", "on"}
 
 # ─────────── Scoring config (claims + Da Vinci) ───────────
 
@@ -216,7 +219,6 @@ def score_davinci_points(t: str) -> Dict[str, int]:
         s = 0
         for pts, plist in rules.items():
             for p in plist:
-                # umbral un poco más permisivo para fases
                 if fuzzy_contains(nt, p, 0.79):
                     s += int(pts)
         out[stage] = s
@@ -341,8 +343,11 @@ def _validate_internal(internal: dict, user_text: str) -> dict:
     return internal
 
 def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str] = None) -> Dict[str, object]:
+    # ← Flag local (evita NameError aunque haya versiones viejas en memoria)
+    eval_video = env_bool("EVAL_ENABLE_VIDEO", False)
+
     # Visual
-    if EVAL_ENABLE_VIDEO and video_path and cv2 and os.path.exists(video_path):
+    if eval_video and video_path and cv2 and os.path.exists(video_path):
         vis_pub, vis_int, vis_pct, vis_ratio = visual_analysis(video_path)
     else:
         vis_pub, vis_int, vis_pct, vis_ratio = (
