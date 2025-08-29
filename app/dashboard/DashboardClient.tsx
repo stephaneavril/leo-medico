@@ -189,6 +189,23 @@ export default function DashboardClient({
         }
         .evaluation-box.rh-box { background:#fff1f1; border-left-color:#cc0000; }
         .evaluation-box.tip-box { background:#f7fbff; border-left-color:#00bfff; }
+
+        /* Caja ligera para los 7 pasos */
+        .howto-box{
+          background: var(--bg-white);
+          border: 1px solid #eef2f7;
+          border-radius: 14px;
+          box-shadow: 0 6px 18px var(--shadow-lg);
+          padding: 16px 18px;
+          margin: 10px 0 22px;
+        }
+        .howto-box h3{
+          margin: 0 0 10px;
+          font: 700 18px 'Montserrat', sans-serif;
+          color: var(--primary-dark);
+        }
+        .howto-box ol{ margin: 8px 0 0; padding-left: 20px; line-height: 1.6; }
+        .howto-box li{ margin: 6px 0; }
       `}</style>
 
       <div className="dashboard-page-container">
@@ -200,13 +217,27 @@ export default function DashboardClient({
         <div className="container-content">
           <h2 className="section-title">Selecciona tu entrenamiento</h2>
 
+          {/* === Pasos de uso (restaurados) === */}
+          <section className="howto-box">
+            <h3>Cómo aprovechar a Leo en 7 pasos</h3>
+            <ol>
+              <li>Elige el escenario de entrenamiento que necesitas.</li>
+              <li>Activa cámara y micrófono; verifica que todo funcione.</li>
+              <li>Haz clic en <strong>Iniciar</strong> y saluda al avatar con “Buenos días, Doctora o Buenos días Doctor”.</li>
+              <li>Expón tu objetivo (p. ej., beneficio, evidencia, o cierre de la visita).</li>
+              <li>Aplica el modelo Da Vinci y aborda objeciones brevemente.</li>
+              <li>Dispones de 8 minutos por sesión y 30 minutos al mes.</li>
+              <li>Al terminar, desconéctate. Capacitación revisará con IA y publicará tu resumen para la siguiente práctica.</li>
+            </ol>
+          </section>
+
           <div className="card-grid">
             <div className="card">
               <h3>Entrevista con Médico</h3>
               <Link
                 href={{
                   pathname: '/interactive-session',
-                  query: { name: userName, email, scenario: 'Entrevista con médico', token: user_token },
+                  query: { name: userName, email, scenario: defaultScenario, token: user_token },
                 }}
                 passHref
               >
