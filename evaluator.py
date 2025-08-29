@@ -1,56 +1,43 @@
-# evaluator.py — Transcript-first, salida compacta para RH + resumen diplomático para usuario
-# -----------------------------------------------------------------------------
-# Retorna:
-#   {
-#     "public": "<resumen amable (usuario)>",
-#     "internal": {
-#        ... (métricas existentes para no romper Admin) ...
-#        "compact": {
-#           "session": {"id": <int>, "name": "<str|None>", "email": "<str|None>", "timestamp": "<iso|None>"},
-#           "score_14": <int>,
-#           "risk": "ALTO|MEDIO|BAJO",
-#           "strengths": [str, ...],
-#           "opportunities": [str, ...],
-#           "coaching_3": [str, str, str],
-#           "frase_guia": "<str>",
-#           "kpis": [str, str, str],
-#           "rh_text": "<bloque listo para pegar>",
-#           "user_text": "<versión amable>"
-#        }
-#     },
-#     "level": "alto|error"
-#   }
-# Guarda en BD: `evaluation_rh` (JSON) sin tocar `evaluation` (lo actualiza el worker).
+# === evaluator.py — Evaluación por CONCEPTOS + salida dual (Usuario / RH) ===
+# - Robusto a transcripción ruidosa: usa embeddings (si hay OPENAI_API_KEY)
+# - Genera resumen diplomático para el usuario y tarjeta “dura” para Capacitación.
+# - Sin dependencias de video (opcional, desactivado por defecto).
 # -----------------------------------------------------------------------------
 
 from __future__ import annotations
-import os, json, textwrap, unicodedata, re, difflib, logging
+import os, json, re, textwrap, unicodedata, difflib
 from typing import Optional, Dict, List, Tuple
 from urllib.parse import urlparse
+from functools import lru_cache
 
-# OpenCV es opcional
+# ---- Dependencias externas
+import psycopg2
+
+# OpenAI (chat + embeddings)
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 try:
-    import cv2
-except ImportError:
+    from openai import OpenAI
+    _openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+except Exception:
+    _openai_client = None
+
+# NumPy para cosenos (si no, fallback simple)
+try:
+    import numpy as np
+except Exception:
+    np = None
+
+# Video opcional (desactivado por defecto)
+try:
+    import cv2  # noqa
+except Exception:
     cv2 = None
 
-import psycopg2
-from openai import OpenAI
+EVAL_ENABLE_VIDEO = os.getenv("EVAL_ENABLE_VIDEO", "0") == "1"
+EMBED_MODEL = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small")
+CHAT_MODEL  = os.getenv("OPENAI_GPT_MODEL", "gpt-4o-mini")
 
-# ───────────────────────── Config ─────────────────────────
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY", ""))
-
-# Habilitar o no evaluación visual (por defecto DESACTIVADA)
-EVAL_ENABLE_VIDEO = os.getenv("EVAL_ENABLE_VIDEO", "0").lower() in ("1", "true", "yes")
-
-# Modelo GPT (ligero y barato por default)
-GPT_MODEL = os.getenv("OPENAI_GPT_MODEL", "gpt-4o-mini")
-
-# Logger sencillo
-logging.basicConfig(level=os.getenv("EVAL_LOG_LEVEL", "INFO").upper())
-log = logging.getLogger("evaluator")
-
-# ───────────────────────── Utils ─────────────────────────
+# ───────────────────── Utilidades de texto ─────────────────────
 
 def normalize(txt: str) -> str:
     if not txt:
@@ -62,16 +49,16 @@ def normalize(txt: str) -> str:
     return t
 
 def canonicalize_products(nt: str) -> str:
-    """Normaliza variantes del producto a 'esoxx-one' (tolerante a ASR)."""
+    """Normaliza variantes del producto a 'esoxx one' (tolerante a ASR)."""
     variants = [
-        r"\beso\s*xx\s*one\b", r"\besox+\s*one\b", r"\besoxx-one\b",
+        r"\beso\s*xx\s*one\b", r"\besox+\s*one\b", r"\besoxx[-\s]*one\b",
         r"\besof+\s*one\b", r"\becox+\s*one\b", r"\besox+\b", r"\besof+\b",
-        r"\becox+\b", r"\beso\s*xx\b", r"\besoxxone\b",
-        r"\bays?oks?\b", r"\bays?oks?\s*one\b", r"\besok+\b",
+        r"\becox+\b", r"\beso\s*xx\b", r"\besoxxone\b", r"\besoks?\b",
+        r"\bes oks?\s*one\b", r"\bes ok\s*one\b",
     ]
     canon = nt
     for pat in variants:
-        canon = re.sub(pat, "esoxx-one", canon)
+        canon = re.sub(pat, "esoxx one", canon)
     return canon
 
 def fuzzy_contains(haystack: str, needle: str, threshold: float = 0.82) -> bool:
@@ -79,172 +66,194 @@ def fuzzy_contains(haystack: str, needle: str, threshold: float = 0.82) -> bool:
         return False
     if needle in haystack:
         return True
-    tokens = haystack.split()
+    toks = haystack.split()
     win = min(max(len(needle.split()) + 4, 8), 40)
-    for i in range(0, max(1, len(tokens) - win + 1)):
-        segment = " ".join(tokens[i:i+win])
+    for i in range(0, max(1, len(toks) - win + 1)):
+        segment = " ".join(toks[i:i+win])
         if difflib.SequenceMatcher(None, segment, needle).ratio() >= threshold:
             return True
     return difflib.SequenceMatcher(None, haystack, needle).ratio() >= max(0.70, threshold - 0.1)
 
-def count_fuzzy_any(nt: str, phrases: List[str], thr: float = 0.82) -> int:
-    return sum(1 for p in phrases if fuzzy_contains(nt, p, thr))
+# ───────────────────── Conceptos semánticos ─────────────────────
 
-# ─────────── Scoring config (reutiliza tu lógica previa) ───────────
-
-WEIGHTED_KWS = {
-    "3pt": [
-        "esoxx-one reduce hasta 90% la frecuencia y severidad de los sintomas de erge",
-        "alivio en menor tiempo (2 semanas vs 4 semanas)",
-        "reduce la falla al tratamiento",
-        "reduce significativamente los sintomas",
-        "reduccion del uso de antiacidos",
-    ],
-    "2pt": [
-        "protege y repara mucosa esofagica",
-        "barrera bioadhesiva",
-        "combinacion de 3 activos",
-        "acido hialuronico",
-        "sulfato de condroitina",
-        "poloxamero 407",
-        "un sobre despues de cada comida y antes de dormir",
-        "esperar 30", "esperar 60", "30-60",
-    ],
-    "1pt": [
-        "mecanismo de proteccion",
-        "actua como barrera mecanica",
-        "esoxx-one",
-        "mejora la calidad de vida",
-    ],
+SEM_CONCEPTS = {
+    "apertura_descubrimiento":
+        "Saludo breve y exploración de necesidades del médico: preguntas sobre pacientes, preocupaciones y contexto clínico.",
+    "posologia_completa":
+        "Posología exacta de ESOXX ONE: un stick después de cada comida y uno antes de dormir; esperar 30 a 60 minutos sin ingerir alimentos o bebidas.",
+    "evidencia_trazable":
+        "Evidencia clínica trazable: menciona autor y año o población y endpoint con resultado claro; evita porcentajes no sustentados.",
+    "mecanismo_correcto":
+        "Mecanismo correcto de ESOXX ONE: dispositivo tópico esofágico que forma una barrera bioadhesiva con ácido hialurónico, condroitina y poloxámero 407.",
+    "sinergia_ibp":
+        "Uso como adyuvante con inhibidores de bomba de protones (IBP), con beneficio frente a monoterapia con IBP.",
+    "cierre_con_acuerdo":
+        "Propone un siguiente paso clínico concreto: prueba con pacientes indicados y acuerda seguimiento con fecha.",
+    "manejo_objeciones":
+        "Escucha objeciones y las aborda con información clínica y tono empático.",
+    "escucha_activa_reflejo":
+        "Parafrasea o valida lo dicho por el médico antes de argumentar; demuestra escucha activa.",
+    "seguridad_moderada":
+        "Seguridad con lenguaje clínico moderado: bien tolerado, acción local, evita absolutos y promesas.",
 }
 
-DAVINCI_POINTS = {
-    "preparacion": {2: ["objetivo smart", "mi objetivo hoy es", "mensaje clave"], 1: ["objetivo de la visita", "plan para hoy"]},
-    "apertura":    {2: ["cuales son las mayores preocupaciones", "que caracteristicas tienen sus pacientes"], 1: ["hola doctora", "gracias por su tiempo"]},
-    "persuasion":  {2: ["beneficio", "mecanismo", "evidencia", "estudio", "combinado con ibp"],},
-    "cierre":      {2: ["siguiente paso", "puedo contar con", "le parece si"], 1: ["acordar un siguiente paso"]},
-    "analisis_post": {1: ["auto-evaluacion", "proxima visita", "que aprendi"]},
-}
+ABSOLUTES   = ["el mejor", "completamente seguro", "totalmente seguro", "no tiene efectos", "para todos"]
+BAD_PHRASES = ["no se", "no tengo idea", "lo invento", "no estudie", "no me acuerdo"]
+SENSITIVE   = ["embarazad", "niños", "pediatr", "descuento", "promocion", "3x4", "precio en clinica"]
+LISTEN_KW   = ["entiendo", "comprendo", "veo que", "si entiendo bien", "parafrase", "que le preocupa"]
+CLOSE_KW    = ["siguiente paso", "podemos acordar", "puedo contar con", "le parece si", "empezar a considerar"]
 
-KW_LIST = ["beneficio", "estudio", "sintoma", "tratamiento", "reflujo", "mecanismo", "eficacia", "seguridad"]
-BAD_PHRASES = ["no se", "no tengo idea", "lo invento", "no lo estudie", "no estudie bien", "no conozco", "no me acuerdo"]
+# ───────── Embeddings helpers (con degradación si no hay API) ─────────
 
-LISTEN_KW  = [
-    "entiendo", "comprendo", "veo que", "lo que dices", "si entiendo bien", "parafraseando",
-    "que le preocupa", "me gustaria conocer", "que caracteristicas tienen", "podria contarme", "como describe a sus pacientes"
-]
+@lru_cache(maxsize=256)
+def _embed(text: str):
+    """Devuelve vector de embedding o lista vacía si no hay soporte."""
+    if not text or not _openai_client or not np:
+        return None
+    try:
+        text = text[:6000]
+        v = _openai_client.embeddings.create(model=EMBED_MODEL, input=text).data[0].embedding
+        return np.array(v, dtype=float)
+    except Exception:
+        return None
 
-PRODUCT_RUBRIC: Dict[str, Dict[str, List[str] | int]] = {
-    "mecanismo": {"weight": 2, "phrases": ["barrera bioadhesiva", "recubre el epitelio esofagico", "poloxamero 407", "acido hialuronico", "sulfato de condroitina"]},
-    "eficacia": {"weight": 3, "phrases": ["alivio en menor tiempo", "reduce significativamente", "sinergia con inhibidores de la bomba de protones", "ibp mas esoxx-one"]},
-    "evidencia": {"weight": 2, "phrases": ["estudio", "evidencia", "mejoria significativa", "reflujo nocturno"]},
-    "uso_posologia": {"weight": 2, "phrases": ["un sobre despues de cada comida y antes de dormir", "30", "60", "agitar"]},
-    "diferenciales": {"weight": 1, "phrases": ["no se absorbe", "bien tolerado", "dispositivo medico"]},
-    "mensajes_base": {"weight": 1, "phrases": ["esoxx-one", "reflujo", "erge"]},
-}
+def _cos(a, b) -> float:
+    if not np or a is None or b is None:
+        return 0.0
+    na, nb = np.linalg.norm(a), np.linalg.norm(b)
+    if na == 0 or nb == 0:
+        return 0.0
+    return float(np.dot(a, b) / (na * nb))
 
-# ─────────── Scorers básicos ───────────
+def semantic_concepts(text: str, thr: float = 0.75) -> Dict[str, float]:
+    """Devuelve {concepto: score_coseno} para conceptos presentes."""
+    if not text:
+        return {}
+    t_emb = _embed(text)
+    if t_emb is None:
+        return {}  # sin embeddings disponibles
+    hits = {}
+    for name, desc in SEM_CONCEPTS.items():
+        c_emb = _embed(f"[CONCEPTO] {name}: {desc}")
+        cos = _cos(t_emb, c_emb)
+        if cos >= thr:
+            hits[name] = round(cos, 3)
+    return hits
 
-def score_weighted_phrases(t: str) -> Dict[str, object]:
+def estimate_transcript_confidence(text: str) -> str:
+    nt = normalize(text)
+    toks = nt.split()
+    if len(toks) < 25:
+        return "Baja"
+    nonalpha = sum(1 for ch in text if not (ch.isalpha() or ch.isspace()))
+    ratio = nonalpha / max(1, len(text))
+    if ratio > 0.18:
+        return "Baja"
+    if ratio > 0.12:
+        return "Media"
+    return "Alta"
+
+# ───────────────── Señales simples + score conceptual ─────────────────
+
+def simple_signals(t: str) -> Dict[str, object]:
     nt = canonicalize_products(normalize(t))
-    breakdown, total = [], 0
-    for pts_key, phrases in WEIGHTED_KWS.items():
-        pts = int(re.sub(r"[^0-9]", "", pts_key) or "0")
-        for p in phrases:
-            if fuzzy_contains(nt, p, 0.80):
-                total += pts
-                breakdown.append({"phrase": p, "points": pts})
-    return {"total_points": total, "breakdown": breakdown}
+    sem_hits = semantic_concepts(t)  # {concept: cos}
+    sem_count = len(sem_hits)
 
-def score_davinci_points(t: str) -> Dict[str, int]:
-    nt = canonicalize_products(normalize(t))
-    out: Dict[str, int] = {}
-    for stage, rules in DAVINCI_POINTS.items():
-        s = 0
-        for pts, plist in rules.items():
-            for p in plist:
-                if fuzzy_contains(nt, p, 0.79):
-                    s += int(pts)
-        out[stage] = s
-    out["total"] = sum(out.values())
-    return out
+    q_rate = t.count("?") / max(1, len(nt.split()))
+    listening_hits = sum(1 for k in LISTEN_KW if fuzzy_contains(nt, k, 0.82))
+    if "escucha_activa_reflejo" in sem_hits:
+        listening_hits = max(listening_hits, 2)
 
-def kw_score(t: str) -> int:
-    nt = canonicalize_products(normalize(t))
-    return sum(1 for kw in KW_LIST if fuzzy_contains(nt, kw, 0.84))
+    closing_flag = ("cierre_con_acuerdo" in sem_hits) or any(fuzzy_contains(nt, k, 0.82) for k in CLOSE_KW)
 
-def disq_flag(t: str) -> bool:
-    nt = normalize(t)
-    return any(fuzzy_contains(nt, w, 0.88) for w in BAD_PHRASES)
+    legacy_kw = sum(
+        1 for k in ["beneficio", "estudio", "mecanismo", "posologia", "reflujo", "erge", "ibp", "seguridad"]
+        if fuzzy_contains(nt, k, 0.84)
+    )
+    legacy_kw = min(8, legacy_kw)
 
-def product_compliance(t: str) -> Tuple[Dict[str, dict], int]:
-    nt = canonicalize_products(normalize(t))
-    detail: Dict[str, dict] = {}
-    total = 0
-    for cat, cfg in PRODUCT_RUBRIC.items():
-        weight: int = int(cfg["weight"])
-        hits = [p for p in cfg["phrases"] if fuzzy_contains(nt, p, 0.80)]
-        score = weight if hits else 0
-        total += score
-        detail[cat] = {"weight": weight, "hits": hits, "score": score}
-    return detail, total
+    red_abs = any(fuzzy_contains(nt, w, 0.88) for w in ABSOLUTES)
+    red_bad = any(fuzzy_contains(nt, w, 0.88) for w in BAD_PHRASES)
+    red_sens= any(fuzzy_contains(nt, w, 0.86) for w in SENSITIVE)
 
-def interaction_quality(t: str) -> Dict[str, object]:
-    nt = normalize(t)
-    tokens = nt.split()
-    length = len(tokens)
-    qmarks = t.count("?")
-    question_rate = round(qmarks / max(1, length) * 100, 2)
-    closing = any(fuzzy_contains(nt, k, 0.80) for k in [
-        "siguiente paso", "podemos acordar", "puedo contar con", "le parece si", "empezar a considerar"
-    ])
-    objections = any(fuzzy_contains(nt, k, 0.82) for k in ["objecion", "preocupacion", "duda", "reserva"])
-    listen_hits = count_fuzzy_any(nt, LISTEN_KW, 0.82)
-    listen_level = "Alta" if listen_hits >= 4 else "Moderada" if listen_hits >= 2 else "Baja"
+    confidence = estimate_transcript_confidence(t)
+
     return {
-        "length_tokens": length,
-        "question_rate": question_rate,
-        "closing_present": closing,
-        "objection_handling_signal": objections,
-        "active_listening_level": listen_level,
+        "q_rate": round(q_rate, 3),
+        "listening_level": "Alta" if listening_hits >= 4 else "Moderada" if listening_hits >= 2 else "Baja",
+        "closing": closing_flag,
+        "concept_hits": sem_hits,
+        "concept_count": sem_count,
+        "legacy_kw": legacy_kw,
+        "red_flags": {"absolutes": red_abs, "ignorance": red_bad, "sensitive": red_sens},
+        "input_confidence": confidence
     }
 
-# ─────────── Visual opcional ───────────
+def score_and_risk(sig: Dict[str, object]) -> Tuple[int, str]:
+    score = 0
+    score += min(6, sig["concept_count"])                         # 0–6 por conceptos presentes
+    score += int((sig["legacy_kw"] / 8.0) * 4.0)                  # 0–4 por “señales de contenido”
+    score += 2 if sig["closing"] else 0                           # 0–2 si propone siguiente paso
+    score += 2 if sig["listening_level"] == "Alta" else (1 if sig["listening_level"] == "Moderada" else 0)  # 0–2
 
-def visual_analysis(path: str):
-    """Devuelve (pub_msg, int_msg, pct_num, ratio_num)."""
-    if not (path and cv2 and os.path.exists(path)):
-        return "⚠️ Sin video evaluado por configuración.", "Sin evaluación de video.", 0.0, 0.0
+    if sig["red_flags"]["absolutes"] or sig["red_flags"]["ignorance"]:
+        score = max(0, score - 2)
+    if sig["input_confidence"] == "Baja":
+        score = max(0, score - 1)
+
+    score = max(0, min(14, score))
+    if sig["red_flags"]["absolutes"] or sig["red_flags"]["ignorance"] or score <= 4:
+        risk = "ALTO"
+    elif score <= 9:
+        risk = "MEDIO"
+    else:
+        risk = "BAJO"
+    return score, risk
+
+def md_status_from_concepts(sem: Dict[str, float]) -> Dict[str, str]:
+    # Mapeo a “Excelente | Bien | Necesita Mejora”
+    def level(has: bool, strong: bool = False) -> str:
+        if strong:
+            return "Excelente" if has else "Necesita Mejora"
+        return "Bien" if has else "Necesita Mejora"
+
+    prep  = level("apertura_descubrimiento" in sem)
+    apertura = prep
+    pers  = "Excelente" if sum(k in sem for k in ["mecanismo_correcto","posologia_completa","evidencia_trazable","sinergia_ibp"]) >= 3 \
+            else "Bien" if sum(k in sem for k in ["mecanismo_correcto","posologia_completa","evidencia_trazable","sinergia_ibp"]) >= 1 \
+            else "Necesita Mejora"
+    cierre = "Excelente" if "cierre_con_acuerdo" in sem else "Necesita Mejora"
+    post   = "Bien" if "manejo_objeciones" in sem else "Necesita Mejora"
+    return {
+        "preparacion": prep,
+        "apertura": apertura,
+        "persuasion": pers,
+        "cierre": cierre,
+        "analisis_post": post,
+    }
+
+# ──────────────────── OpenAI helpers (safe) ────────────────────
+
+def chat_json(prompt_system: str, prompt_user: str) -> dict:
+    if not _openai_client:
+        return {}
     try:
-        MAX_FRAMES = int(os.getenv("MAX_FRAMES_TO_CHECK", 60))
-        cap = cv2.VideoCapture(path)
-        if not cap.isOpened():
-            return "⚠️ No se pudo abrir video.", "Error video", 0.0, 0.0
-        frontal = total = 0
-        face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
-        for _ in range(MAX_FRAMES):
-            ok, frame = cap.read()
-            if not ok:
-                break
-            total += 1
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            faces = face_cascade.detectMultiScale(gray, 1.3, 5)
-            if len(faces):
-                frontal += 1
-        cap.release()
-        if not total:
-            return "⚠️ Sin frames para analizar.", "Sin frames", 0.0, 0.0
-        ratio = frontal / total
-        pct = ratio * 100.0
-        if ratio >= 0.7:
-            return "✅ Buena presencia frente a cámara.", "Correcta", pct, ratio
-        if ratio > 0:
-            return "⚠️ Mejora la visibilidad.", "Mejorar visibilidad", pct, ratio
-        return "❌ No se detectó rostro.", "No detectado", 0.0, 0.0
-    except Exception as e:
-        return f"⚠️ Error visual: {e}", "Error video", 0.0, 0.0
+        rsp = _openai_client.chat.completions.create(
+            model=CHAT_MODEL,
+            response_format={"type": "json_object"},
+            temperature=0.4,
+            timeout=45,
+            messages=[
+                {"role": "system", "content": prompt_system},
+                {"role": "user", "content": prompt_user}
+            ],
+        )
+        return json.loads(rsp.choices[0].message.content)
+    except Exception:
+        return {}
 
-# ─────────── BD ───────────
+# ───────────────────── Persistencia en BD ─────────────────────
 
 def get_db_connection():
     database_url = os.getenv("DATABASE_URL")
@@ -256,340 +265,164 @@ def get_db_connection():
         host=parsed.hostname, port=parsed.port, sslmode="require",
     )
 
-def _get_session_info(session_id: int) -> dict:
-    out = {"id": int(session_id), "name": None, "email": None, "timestamp": None, "scenario": None}
-    try:
-        conn = get_db_connection()
-        with conn.cursor() as cur:
-            cur.execute("SELECT name, email, timestamp, scenario FROM interactions WHERE id=%s;", (int(session_id),))
-            row = cur.fetchone()
-        conn.close()
-        if row:
-            out["name"], out["email"], out["timestamp"], out["scenario"] = row
-    except Exception as e:
-        log.warning("No se pudo leer session info (%s): %s", session_id, e)
-    return out
+# ───────────────────── Visual (opcional) ─────────────────────
 
-# ─────────── Ensamblado de salida compacta ───────────
+def visual_stub():
+    if not EVAL_ENABLE_VIDEO:
+        return ("⚠️ Sin video evaluado por configuración.", "Sin evaluación de video.", "N/A")
+    return ("⚠️ Evaluación de video no disponible.", "No evaluado", "N/A")
 
-POSO_PATTERNS = [
-    "un sobre despues de cada comida y antes de dormir",
-    "despues de cada comida", "antes de dormir", "30-60", "30 min", "60 min", "agitar"
-]
-EVID_PATTERNS = ["estudio", "evidencia", "savarino", "n=", "random", "p<", "significativa"]
-NOCT_PATTERNS = ["nocturn", "noche", "sintomas nocturnos"]
-IBP_PATTERNS  = ["ibp", "inhibidores de la bomba de protones", "omeprazol", "esomeprazol"]
-
-ABSOLUTE_FLAGS_HI = [
-    "90%", "noventa por ciento", "100%", "cualquier paciente", "para todos",
-    "totalmente seguro", "no tiene efectos secundarios", "sin interacciones"
-]
-ABSOLUTE_FLAGS_MED = ["unico", "inmediato", "desde la primera toma", "garantiza"]
-
-def _bool_hit(nt: str, pats: List[str], thr: float = 0.80) -> bool:
-    return any(fuzzy_contains(nt, p, thr) for p in pats)
-
-def _risk_level(nt: str) -> str:
-    if _bool_hit(nt, ABSOLUTE_FLAGS_HI, 0.88):
-        return "ALTO"
-    if _bool_hit(nt, ABSOLUTE_FLAGS_MED, 0.86):
-        return "MEDIO"
-    return "BAJO"
-
-def _phase_grade_to_points(grade: str) -> int:
-    # Excelente=2, Bien=1, Necesita Mejora=0
-    g = (grade or "").strip().lower()
-    if g.startswith("excel"): return 2
-    if g.startswith("bien"): return 1
-    return 0
-
-def _make_compact_brief(session_id: int, user_text: str, md_labels: dict, iq: dict) -> dict:
-    nt = canonicalize_products(normalize(user_text))
-
-    # Señales clave
-    has_poso = _bool_hit(nt, POSO_PATTERNS)
-    has_evid = _bool_hit(nt, EVID_PATTERNS)
-    has_close = bool(iq.get("closing_present"))
-    mentions_noct = _bool_hit(nt, NOCT_PATTERNS)
-    mentions_ibp = _bool_hit(nt, IBP_PATTERNS)
-    risk = _risk_level(nt)
-
-    # Score 14 = 5 fases * (0–2) + posología(1) + evidencia(1) + cierre(1)
-    phase_points = sum(_phase_grade_to_points(md_labels.get(k, "Necesita Mejora"))
-                       for k in ["preparacion", "apertura", "persuasion", "cierre", "analisis_post"])
-    score_14 = int(phase_points + (1 if has_poso else 0) + (1 if has_evid else 0) + (1 if has_close else 0))
-    score_14 = max(0, min(14, score_14))
-
-    # Fortalezas / Oportunidades
-    strengths = []
-    if mentions_noct: strengths.append("Conecta con reflujo nocturno (relevancia clínica).")
-    if mentions_ibp:  strengths.append("Integra sinergia con IBP de forma adecuada.")
-    if has_poso:      strengths.append("Explica posología correctamente (stick post-comida + nocturno; 30–60 min).")
-    if iq.get("active_listening_level") in ("Alta", "Moderada"):
-        strengths.append(f"Escucha activa {iq['active_listening_level'].lower()}.")
-
-    opportunities = []
-    if not has_evid:  opportunities.append("Aterrizar evidencias con dato breve (autor/año, n, resultado).")
-    if not has_close: opportunities.append("Cerrar con un siguiente paso medible (p.ej., 2 casos y fecha de revisión).")
-    if iq.get("active_listening_level") == "Baja":
-        opportunities.append("Incrementar preguntas de descubrimiento y parafraseo.")
-    # Evita mencionar pronunciación del producto (pedido explícito del cliente)
-
-    # Coaching (3)
-    coaching_3 = [
-        "Practicar pitch breve: mecanismo + posología + evidencia (30–45 s).",
-        ("Reforzar ejemplos de paciente con reflujo nocturno y uso adyuvante con IBP."
-         if mentions_noct else
-         "Agregar ejemplo concreto de reflujo nocturno con uso adyuvante con IBP."),
-        "Preparar cierre con propuesta de seguimiento (2 pacientes; control en 2 semanas)."
-    ]
-
-    # Frase guía
-    frase = ("“ESOXX ONE: protege mucosa y mejora sueño en reflujo nocturno; "
-             "con IBP acelera respuesta (2 vs 4 semanas) y favorece adherencia.”")
-
-    # KPIs sugeridos
-    kpis = [
-        "% pacientes con mejoría nocturna reportada",
-        "Reducción de falla terapéutica vs monoterapia",
-        "Apego a posología (1 post-comida + 1 nocturno; 30–60 min sin ingerir)",
-    ]
-
-    # Encabezado con mínimos datos de sesión
-    sess = _get_session_info(session_id)
-    encabezado = f"Sesión: {sess.get('timestamp') or 'N/D'} · Score: {score_14}/14 · Riesgo: {risk}"
-
-    rh_text = textwrap.dedent(f"""\
-        {encabezado}
-        Fortalezas: {("; ".join(strengths) or "—")}
-        Oportunidades: {("; ".join(opportunities) or "—")}
-        Coaching (3): {("; ".join(coaching_3))}
-        Frase guía: {frase}
-        KPI: {("; ".join(kpis))}
-    """).strip()
-
-    # Versión amable (usuario)
-    user_text_block = textwrap.dedent("""\
-        ¡Gracias por tu tiempo! Tu explicación de ESOXX ONE va por buen camino. 
-        Te sugerimos reforzar brevemente la evidencia clínica y dejar un siguiente paso concreto 
-        (por ejemplo, iniciar en 1–2 pacientes con reflujo nocturno). Recuerda la posología: 
-        1 stick después de cada comida y 1 antes de dormir, manteniendo 30–60 minutos sin ingerir alimentos o bebidas. 
-        Estamos aquí para acompañarte en lo que necesites.
-    """).strip()
-
-    return {
-        "session": {"id": sess["id"], "name": sess["name"], "email": sess["email"], "timestamp": sess["timestamp"]},
-        "score_14": score_14,
-        "risk": risk,
-        "strengths": strengths,
-        "opportunities": opportunities,
-        "coaching_3": coaching_3[:3],
-        "frase_guia": frase,
-        "kpis": kpis,
-        "rh_text": rh_text,
-        "user_text": user_text_block,
-    }
-
-# ─────────── Blindaje y defaults ───────────
-
-def _validate_internal(internal: dict, user_text: str) -> dict:
-    internal = internal or {}
-    # Campos legacy que tu Admin ya consume
-    internal.setdefault("da_vinci_points", score_davinci_points(user_text))
-    internal.setdefault("knowledge_score_legacy", f"{kw_score(user_text)}/8")
-    internal.setdefault("knowledge_score_legacy_num", kw_score(user_text))
-    internal.setdefault("product_claims", {"detail": {}, "product_score_total": 0})
-    internal.setdefault("interaction_quality", {})
-    if "kpis" not in internal:
-        internal["kpis"] = {
-            "avg_score": 0.0,
-            "avg_phase_score_1_3": 1.0,
-            "avg_steps_pct": 0.0,
-            "legacy_count": kw_score(user_text),
-        }
-    return internal
-
-# ─────────── Evaluador principal ───────────
+# ───────────────────── Evaluación principal ─────────────────────
 
 def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str] = None) -> Dict[str, object]:
-    # Visual (opcional por bandera)
-    if EVAL_ENABLE_VIDEO:
-        vis_pub, vis_int, vis_pct, vis_ratio = visual_analysis(video_path)
-    else:
-        vis_pub, vis_int, vis_pct, vis_ratio = ('⚠️ Sin video evaluado por configuración.', 'Sin evaluación de video.', 0.0, 0.0)
+    nt = canonicalize_products(normalize(user_text or ""))
 
-    # Flags de pasos para KPI simple
-    PHRASE_MAP = {
-        "preparacion": ["objetivo de la visita", "propósito de la visita", "mensaje clave", "smart"],
-        "apertura": ["buenos dias", "hola doctora", "principal preocupacion", "que le preocupa"],
-        "persuasion": ["beneficio", "mecanismo", "estudio", "evidencia", "ibp"],
-        "cierre": ["siguiente paso", "podemos acordar", "puedo contar con", "le parece si"],
-        "analisis_post": ["auto-evaluacion", "proxima visita", "que aprendi"],
-    }
-    def step_flag(step_kw: List[str]) -> bool:
-        nt = canonicalize_products(normalize(user_text))
-        return any(fuzzy_contains(nt, p, 0.80) for p in step_kw)
+    # Señales y puntaje
+    sig = simple_signals(user_text or "")
+    score14, risk = score_and_risk(sig)
+    md_status = md_status_from_concepts(sig.get("concept_hits", {}))
 
-    sales_model_flags = {step: step_flag(kws) for step, kws in PHRASE_MAP.items()}
-    steps_applied_count = sum(sales_model_flags.values())
-    steps_applied_pct = round(100.0 * steps_applied_count / 5.0, 1)
+    # Visual (stub por defecto)
+    vis_pub, vis_int, vis_pct = visual_stub()
 
-    # Puntuaciones propias
-    weighted   = score_weighted_phrases(user_text)
-    davinci_pts = score_davinci_points(user_text)
-    legacy_8   = kw_score(user_text)
+    # --- PROMPTS (Usuario diplomático + RH directo)
+    SYSTEM = (
+        "Eres un coach farmacéutico senior. Evalúa SOLO lo que aparece en el texto; "
+        "usa tono profesional. Devuelve JSON con dos bloques: "
+        '{"public_summary": "...", '
+        '"rh": {"strengths":[],"opportunities":[],"coaching_3":[],"guide_phrase":"", "kpis_next":[]}}'
+    )
 
-    # Calidad + producto
-    iq = interaction_quality(user_text)
-    prod_detail, prod_total = product_compliance(user_text)
-
-    # GPT (resumen + etiquetas de fases)
-    try:
-        SYSTEM_PROMPT = textwrap.dedent("""
-        Actúa como coach-evaluador senior de la industria farmacéutica (Alfasigma).
-        Evalúa SOLO el texto transcrito. Clasifica cada fase del Modelo Da Vinci como
-        "Excelente", "Bien" o "Necesita Mejora". Entrega JSON ESTRICTO con este formato:
-        {
-          "public_summary": "<máx 120 palabras, tono amable y motivador>",
-          "internal_analysis": {
-            "overall_evaluation": "<2-3 frases objetivas para capacitación>",
-            "Modelo_DaVinci": {
-              "preparacion": "Excelente|Bien|Necesita Mejora",
-              "apertura": "Excelente|Bien|Necesita Mejora",
-              "persuasion": "Excelente|Bien|Necesita Mejora",
-              "cierre": "Excelente|Bien|Necesita Mejora",
-              "analisis_post": "Excelente|Bien|Necesita Mejora"
-            }
-          }
-        }
-        """).strip()
-        convo = f"--- Participante ---\n{user_text}\n--- Médico (Leo) ---\n{leo_text or '(no disponible)'}"
-        completion = client.chat.completions.create(
-            model=GPT_MODEL,
-            response_format={"type": "json_object"},
-            timeout=40,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": convo},
-            ],
-            temperature=0.4,
-        )
-        gpt_json     = json.loads(completion.choices[0].message.content or "{}")
-        gpt_public   = gpt_json.get("public_summary", "")
-        gpt_internal = gpt_json.get("internal_analysis", {}) or {}
-        md_labels    = gpt_internal.get("Modelo_DaVinci", {}) or {}
-        level = "alto"
-    except Exception as e:
-        log.warning("GPT fallback por error: %s", e)
-        gpt_public = ("Gracias por la presentación. Refuerza la estructura Da Vinci, usa evidencia clínica puntual "
-                      "y cierra con un siguiente paso claro; práctica enfocada en reflujo nocturno.")
-        gpt_internal = {
-            "overall_evaluation": "Evaluación limitada por conectividad; se generan métricas internas objetivas.",
-            "Modelo_DaVinci": {
-                "preparacion": "Necesita Mejora",
-                "apertura": "Necesita Mejora",
-                "persuasion": "Necesita Mejora",
-                "cierre": "Necesita Mejora",
-                "analisis_post": "Necesita Mejora",
-            }
-        }
-        md_labels = gpt_internal["Modelo_DaVinci"]
-        level = "error"
-
-    # KPI promedio (1–3 → 0–10)
-    MAP_Q2N = {"Excelente": 3, "Bien": 2, "Necesita Mejora": 1}
-    md_scores = [MAP_Q2N.get(md_labels.get(k, "Necesita Mejora"), 1) for k in ["preparacion","apertura","persuasion","cierre","analisis_post"]]
-    avg_phase_score_1_3 = round(sum(md_scores) / 5.0, 2)
-    avg_score_0_10      = round((avg_phase_score_1_3 - 1) * (10 / 2), 1)
-
-    # Compact brief (lo que RH quiere ver)
-    compact = _make_compact_brief(session_id=0, user_text=user_text, md_labels=md_labels, iq=iq)  # session_id real se setea en evaluate_and_persist
-
-    # Armado interno completo (mantiene legacy + añade compact)
-    internal_summary = {
-        "overall_training_summary": gpt_internal.get("overall_evaluation", ""),
-        "knowledge_score_legacy": f"{legacy_8}/8",
-        "knowledge_score_legacy_num": legacy_8,
-        "knowledge_weighted_total_points": weighted["total_points"],
-        "knowledge_weighted_breakdown": weighted["breakdown"],
-
-        "visual_presence": vis_int,
-        "visual_percentage": vis_pct,
-
-        "da_vinci_step_flags": {
-            **{k: ("✅" if v else "❌") for k, v in sales_model_flags.items()},
-            "steps_applied_count": f"{steps_applied_count}/5",
-            "steps_applied_pct": steps_applied_pct,
-        },
-        "da_vinci_points": davinci_pts,
-
-        "product_claims": {"detail": prod_detail, "product_score_total": prod_total},
-        "interaction_quality": iq,
-
-        "active_listening_simple_detection": iq["active_listening_level"],
-        "disqualifying_phrases_detected": disq_flag(user_text),
-
-        "gpt_detailed_feedback": {
-            "overall_evaluation": gpt_internal.get("overall_evaluation", ""),
-            "Modelo_DaVinci": md_labels
-        },
-
-        "kpis": {
-            "avg_score": avg_score_0_10,
-            "avg_phase_score_1_3": avg_phase_score_1_3,
-            "avg_steps_pct": steps_applied_pct,
-            "legacy_count": legacy_8,
-        },
-
-        # NUEVO bloque compacto para RH
-        "compact": compact
+    # Prepara contexto para el LLM (sin inventar, usa señales detectadas)
+    context = {
+        "score": score14,
+        "risk": risk,
+        "input_confidence": sig.get("input_confidence"),
+        "concepts_present": list(sig.get("concept_hits", {}).keys()),
+        "red_flags": sig.get("red_flags"),
+        "da_vinci_status": md_status
     }
 
-    # Público (diplomático) → usa la versión amable del compacto si existe
-    public_block = textwrap.dedent(f"""
-        {compact['user_text'] if compact and compact.get('user_text') else gpt_public}
+    USER = textwrap.dedent(f"""
+    TRANSCRIPCIÓN (representante):
+    {user_text or "[vacío]"}
+
+    CONTEXTO (no inventes):
+    {json.dumps(context, ensure_ascii=False)}
+
+    INSTRUCCIONES:
+    1) "public_summary": ≤120 palabras, tono amable y motivador para el usuario.
+    2) "rh": escribe:
+       - "strengths": 2-4 fortalezas factuales.
+       - "opportunities": 3-5 oportunidades específicas (evita absolutos, exige posología completa, pide evidencia trazable).
+       - "coaching_3": exactamente 3 bullets accionables.
+       - "guide_phrase": una frase clínica guía (1 línea) sobre ESOXX ONE.
+       - "kpis_next": 2-4 KPIs concretos para la próxima visita.
+    No inventes datos; si falta info, sugiere prácticas seguras.
+    """)
+
+    gpt = chat_json(SYSTEM, USER)
+
+    # Fallbacks si no hay LLM o contenido insuficiente
+    public_summary = (
+        gpt.get("public_summary")
+        if isinstance(gpt, dict) and gpt.get("public_summary")
+        else "Gracias por entrenar con Leo. Refuerza evidencia y posología completa; cierra con un siguiente paso acordado."
+    )
+
+    rh = gpt.get("rh") if isinstance(gpt, dict) else {}
+    strengths     = rh.get("strengths")     or ["Trato cordial.", "Buena disposición al diálogo."]
+    opportunities = rh.get("opportunities") or ["Estructura Da Vinci incompleta.", "Posología no declarada con precisión.", "Falta evidencia trazable."]
+    coaching_3    = rh.get("coaching_3")    or [
+        "Decir posología completa: 1 stick post-comida + 1 antes de dormir; esperar 30–60 min.",
+        "Sustituir absolutos por lenguaje clínico moderado.",
+        "Citar un estudio con autor/año y resultado principal."
+    ]
+    guide_phrase  = rh.get("guide_phrase")  or "ESOXX ONE: barrera bioadhesiva tópica; protege mucosa y complementa IBP con posología clara."
+    kpis_next     = rh.get("kpis_next")     or ["% pacientes con alivio temprano", "Adherencia a ventana 30–60 min", "Uso combinado con IBP"]
+
+    # Tarjeta RH en el formato solicitado
+    now_iso = os.getenv("NOW_ISO_OVERRIDE") or ""
+    rh_card_text = textwrap.dedent(f"""
+    Sesión: {now_iso or "—"} · Score: {score14}/14 · Riesgo: {risk}
+    Fortalezas: {("; ".join(strengths)).rstrip('.')}
+    Oportunidades clave: {("; ".join(opportunities)).rstrip('.')}
+    Coaching inmediato (3):
+    - {coaching_3[0]}
+    - {coaching_3[1]}
+    - {coaching_3[2]}
+    Frase guía sugerida:
+    {guide_phrase}
+    KPI próxima visita: {("; ".join(kpis_next)).rstrip('.')}
+    Confianza del análisis (calidad de transcripción): {sig.get("input_confidence")}
     """).strip()
 
-    # Blindaje de esquema por si algo se pierde
-    internal_summary = _validate_internal(internal_summary, user_text)
+    # Bloque público breve (con recordatorio amable)
+    public_block = textwrap.dedent(f"""
+    {public_summary}
 
-    return {"public": public_block, "internal": internal_summary, "level": level}
+    {vis_pub}
 
-# ─────────── Persistencia ───────────
+    Áreas sugeridas:
+    • Apoya con evidencia trazable y posología concreta.
+    • Cierra con un siguiente paso acordado.
+    • Refuerza preguntas y estructura.
+    """).strip()
+
+    internal_summary = {
+        # Texto completo para mostrar en Admin (RH)
+        "rh_card_text": rh_card_text,
+
+        # Métricas clave (sin “numeritis”)
+        "score14": score14,
+        "risk": risk,
+        "input_confidence": sig.get("input_confidence"),
+        "da_vinci_status": md_status,
+
+        # Para compatibilidad con vistas antiguas (si las usas)
+        "overall_training_summary": rh.get("overall_evaluation") or "Resumen enfocado a capacitación disponible en 'rh_card_text'.",
+        "gpt_detailed_feedback": {
+            "overall_evaluation": rh.get("overall_evaluation", ""),
+            "Modelo_DaVinci": {
+                "preparacion": md_status["preparacion"],
+                "apertura": md_status["apertura"],
+                "persuasion": md_status["persuasion"],
+                "cierre": md_status["cierre"],
+                "analisis_post": md_status["analisis_post"],
+            }
+        },
+        # Guardamos también los bulletes
+        "strengths": strengths,
+        "opportunities": opportunities,
+        "coaching_3": coaching_3,
+        "guide_phrase": guide_phrase,
+        "kpis_next": kpis_next,
+
+        # Por si en el futuro quieres auditar conceptos detectados
+        "concept_hits": sig.get("concept_hits", {}),
+        "red_flags": sig.get("red_flags", {}),
+    }
+
+    return {"public": public_block, "internal": internal_summary, "level": "ok"}
+
+# ───────────────────── Persistencia (evaluate_and_persist) ─────────────────────
 
 def evaluate_and_persist(session_id: int, user_text: str, leo_text: str, video_path: Optional[str] = None) -> Dict[str, object]:
-    res = evaluate_interaction(user_text or "", leo_text or "", video_path)
-    internal = _validate_internal(res.get("internal"), user_text)
-
-    # Rellena datos de sesión en el bloque compacto (id, name, email, timestamp)
-    try:
-        sess = _get_session_info(session_id)
-        if "compact" in internal and isinstance(internal["compact"], dict):
-            internal["compact"]["session"] = {
-                "id": int(session_id),
-                "name": sess.get("name"),
-                "email": sess.get("email"),
-                "timestamp": sess.get("timestamp"),
-            }
-            # Reempaqueta encabezado con fecha si hiciera falta
-            # (el texto ya trae un encabezado; lo dejamos tal cual para no duplicar)
-    except Exception as e:
-        log.warning("No se pudo enriquecer compact.session: %s", e)
-
+    result = evaluate_interaction(user_text, leo_text, video_path)
     conn = None
     try:
         conn = get_db_connection()
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE interactions SET evaluation_rh = %s WHERE id = %s",
-                (json.dumps(internal), int(session_id))
+                (json.dumps(result.get("internal", {}), ensure_ascii=False), int(session_id))
             )
         conn.commit()
-    except Exception as e:
-        res["level"] = "error"
-        res["public"] += "\n\n⚠️ No se pudo registrar el análisis en BD."
-        log.error("Persistencia evaluation_rh falló: %s", e)
+    except Exception:
+        # No abortamos; devolvemos public igualmente
+        result["level"] = "error"
+        result["public"] += "\n\n⚠️ No se pudo registrar el análisis en BD."
     finally:
         if conn:
             conn.close()
-    return res
+    return result
