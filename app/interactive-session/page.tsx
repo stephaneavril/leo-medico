@@ -37,7 +37,7 @@ const DEFAULT_CONFIG: StartAvatarRequest = {
   knowledgeId: '13f254b102cf436d8c07b9fb617dbadf',
   language: 'es',
   voice: {
-    voiceId: '8124d9bfe389414f8f660d82fb9ddde8',
+    voiceId: '1edf8ae6571d46c8b7e719eaa91f93c6',
     model: ElevenLabsModel.eleven_multilingual_v2,
     rate: 1.15,
     emotion: VoiceEmotion.FRIENDLY,
