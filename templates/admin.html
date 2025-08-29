@@ -87,6 +87,9 @@
     .evaluation { margin-top: 20px; padding: 15px; border-radius: 8px; background: #e0f7fa; border-left: 5px solid #0099cc; color: var(--text-dark); }
     .evaluation.rh { background: #ffeeee; border-left-color: var(--secondary-red); }
     .evaluation.rh h4 { color: var(--secondary-red); margin: 15px 0 5px; font: 600 1em 'Montserrat'; }
+    .evaluation.rh em { color:#8a1d1d; font-style: italic; }
+    .evaluation.rh button { background:#af2a2a; color:#fff; }
+    .evaluation.rh button:hover { background:#8f2323; }
 
     .metric-line {
       display: flex; justify-content: space-between;
@@ -173,97 +176,133 @@
           <strong>Resumen para usuario:</strong><br />{{ row[8] }}
         </div>
 
-        <!-- ======== Análisis para Capacitación (compatible con sesiones antiguas) ======== -->
+        <!-- ======== Análisis para Capacitación (compact si existe) ======== -->
         {% set internal = row[9] %}
+        {% set compact = internal.compact if internal and internal.compact is defined else None %}
         {% set summary = internal.overall_training_summary or internal.overall_rh_summary %}
-        {% if summary %}
-        <div class="evaluation rh">
-          <strong>Análisis para Capacitación:</strong>
-          <p><strong>Resumen General:</strong> {{ summary }}</p>
 
-          {# --- ALIAS A LOS FEEDBACKS DE GPT --- #}
-          {% set fb = internal.gpt_detailed_feedback %}
-          {% set md = fb.Modelo_DaVinci if fb and fb.Modelo_DaVinci is defined
-                    else (fb.modelo_davinci if fb and fb.modelo_davinci is defined else None) %}
+        {% if compact %}
+          <div class="evaluation rh">
+            <strong>Análisis para Capacitación:</strong>
 
-          <h4>🎯 Aplicación del Modelo de Ventas (Da Vinci)</h4>
-          <div class="metric-line"><span>Preparación:</span><span>{{ md.preparacion if md else 'N/A' }}</span></div>
-          <div class="metric-line"><span>Apertura:</span><span>{{ md.apertura if md else 'N/A' }}</span></div>
-          <div class="metric-line"><span>Persuasión:</span><span>{{ md.persuasion if md else 'N/A' }}</span></div>
-          <div class="metric-line"><span>Cierre:</span><span>{{ md.cierre if md else 'N/A' }}</span></div>
-          <div class="metric-line"><span>Análisis Post:</span><span>{{ md.analisis_post if md else 'N/A' }}</span></div>
+            <p style="margin-top:6px">
+              <strong>{{ row[1] or 'Participante' }}</strong>
+              <span style="color:#666">
+                · Sesión: {{ row[7] or 'N/D' }}
+                · <strong>Score:</strong> {{ compact.score_14 }}/14
+                · <strong>Riesgo:</strong> {{ compact.risk }}
+              </span>
+            </p>
 
-          <h4 style="margin-top: 15px">🧠 Conocimientos y Habilidades</h4>
-          <div class="metric-line">
-            <span>Palabras clave (legacy 0–8):</span>
-            <span>{{ internal.knowledge_score_legacy or internal.knowledge_score or 'N/A' }}</span>
+            <p style="margin-top:10px"><strong>Fortalezas:</strong>
+              {{ (compact.strengths or []) | join('; ') or '—' }}</p>
+
+            <p><strong>Oportunidades:</strong>
+              {{ (compact.opportunities or []) | join('; ') or '—' }}</p>
+
+            <p><strong>Coaching (3):</strong>
+              {{ (compact.coaching_3 or []) | join('; ') or '—' }}</p>
+
+            <p><strong>Frase guía:</strong>
+              <em>{{ compact.frase_guia or '—' }}</em></p>
+
+            <p><strong>KPI:</strong>
+              {{ (compact.kpis or []) | join('; ') or '—' }}</p>
+
+            <div style="display:flex; gap:8px; margin-top:10px">
+              <button type="button"
+                      onclick="navigator.clipboard.writeText({{ (compact.rh_text or '') | tojson }})">
+                Copiar texto RH
+              </button>
+              <button type="button"
+                      onclick="navigator.clipboard.writeText({{ (compact.user_text or row[8] or '') | tojson }})">
+                Copiar resumen usuario
+              </button>
+            </div>
           </div>
 
-          <div class="metric-line">
-            <span>Puntos ponderados (frases clínicas):</span>
-            <span>
-              {% if internal.knowledge_weighted_total_points is defined %}
-                {{ internal.knowledge_weighted_total_points }}
-              {% else %} N/A {% endif %}
-            </span>
-          </div>
-
-          {% if internal.knowledge_weighted_breakdown %}
-            <table>
-              <tr><th>Frase encontrada</th><th>Puntos</th></tr>
-              {% for item in internal.knowledge_weighted_breakdown %}
-                <tr><td>{{ item.phrase }}</td><td>{{ item.points }}</td></tr>
-              {% endfor %}
-            </table>
-          {% endif %}
-
-          <div class="metric-line">
-            <span>Escucha Activa (simple):</span>
-            <span>{{ internal.active_listening_simple_detection or 'N/A' }}</span>
-          </div>
-
-          <div class="metric-line">
-            <span>Presencia en video:</span>
-            <span>{{ internal.visual_presence or 'N/A' }} ({{ internal.visual_percentage or 'N/A' }})</span>
-          </div>
-
-          <h4 style="margin-top: 15px">🎯 Puntos por Fase (Modelo Da Vinci)</h4>
-          {% set pts = internal.da_vinci_points %}
-          {% if pts %}
-            <table>
-              <tr><th>Fase</th><th>Puntos</th></tr>
-              <tr><td>Preparación</td><td>{{ pts.preparacion }}</td></tr>
-              <tr><td>Apertura</td><td>{{ pts.apertura }}</td></tr>
-              <tr><td>Persuasión</td><td>{{ pts.persuasion }}</td></tr>
-              <tr><td>Cierre</td><td>{{ pts.cierre }}</td></tr>
-              <tr><td>Total</td><td><strong>{{ pts.total }}</strong></td></tr>
-            </table>
-          {% else %}
-            <p>No hay puntos por fase calculados.</p>
-          {% endif %}
-
-          {% if internal.follow_up_suggestions %}
-            <h4 style="margin-top: 15px">🔁 Siguientes pasos sugeridos</h4>
-            <ul>
-              {% for s in internal.follow_up_suggestions %}
-                <li>{{ s }}</li>
-              {% endfor %}
-            </ul>
-          {% endif %}
-
-          {% if fb and fb.overall_evaluation %}
-            <h4 style="margin-top: 15px">Comentarios Detallados</h4>
-            <p><strong>Evaluación general:</strong> {{ fb.overall_evaluation }}</p>
-            {% if fb.Areas_de_mejora %}
-              <p><strong>Áreas de Mejora:</strong></p>
-              <ul>
-                {% for area in fb.Areas_de_mejora %}
-                  <li>{{ area }}</li>
-                {% endfor %}
-              </ul>
+        {% else %}
+          <!-- ======== Fallback: render previo con métricas ======== -->
+          <div class="evaluation rh">
+            <strong>Análisis para Capacitación:</strong>
+            {% if summary %}
+              <p><strong>Resumen General:</strong> {{ summary }}</p>
             {% endif %}
-          {% endif %}
-        </div>
+
+            {# --- ALIAS A LOS FEEDBACKS DE GPT --- #}
+            {% set fb = internal.gpt_detailed_feedback %}
+            {% set md = fb.Modelo_DaVinci if fb and fb.Modelo_DaVinci is defined
+                      else (fb.modelo_davinci if fb and fb.modelo_davinci is defined else None) %}
+
+            <h4>🎯 Aplicación del Modelo de Ventas (Da Vinci)</h4>
+            <div class="metric-line"><span>Preparación:</span><span>{{ md.preparacion if md else 'N/A' }}</span></div>
+            <div class="metric-line"><span>Apertura:</span><span>{{ md.apertura if md else 'N/A' }}</span></div>
+            <div class="metric-line"><span>Persuasión:</span><span>{{ md.persuasion if md else 'N/A' }}</span></div>
+            <div class="metric-line"><span>Cierre:</span><span>{{ md.cierre if md else 'N/A' }}</span></div>
+            <div class="metric-line"><span>Análisis Post:</span><span>{{ md.analisis_post if md else 'N/A' }}</span></div>
+
+            <h4 style="margin-top: 15px">🧠 Conocimientos y Habilidades</h4>
+            <div class="metric-line">
+              <span>Palabras clave (legacy 0–8):</span>
+              <span>{{ internal.knowledge_score_legacy or internal.knowledge_score or 'N/A' }}</span>
+            </div>
+
+            <div class="metric-line">
+              <span>Puntos ponderados (frases clínicas):</span>
+              <span>
+                {% if internal.knowledge_weighted_total_points is defined %}
+                  {{ internal.knowledge_weighted_total_points }}
+                {% else %} N/A {% endif %}
+              </span>
+            </div>
+
+            {% if internal.knowledge_weighted_breakdown %}
+              <table>
+                <tr><th>Frase encontrada</th><th>Puntos</th></tr>
+                {% for item in internal.knowledge_weighted_breakdown %}
+                  <tr><td>{{ item.phrase }}</td><td>{{ item.points }}</td></tr>
+                {% endfor %}
+              </table>
+            {% endif %}
+
+            <div class="metric-line">
+              <span>Escucha Activa (simple):</span>
+              <span>{{ internal.active_listening_simple_detection or 'N/A' }}</span>
+            </div>
+
+            <div class="metric-line">
+              <span>Presencia en video:</span>
+              <span>{{ internal.visual_presence or 'N/A' }} ({{ internal.visual_percentage or 'N/A' }})</span>
+            </div>
+
+            <h4 style="margin-top: 15px">🎯 Puntos por Fase (Modelo Da Vinci)</h4>
+            {% set pts = internal.da_vinci_points %}
+            {% if pts %}
+              <table>
+                <tr><th>Fase</th><th>Puntos</th></tr>
+                <tr><td>Preparación</td><td>{{ pts.preparacion }}</td></tr>
+                <tr><td>Apertura</td><td>{{ pts.apertura }}</td></tr>
+                <tr><td>Persuasión</td><td>{{ pts.persuasion }}</td></tr>
+                <tr><td>Cierre</td><td>{{ pts.cierre }}</td></tr>
+                <tr><td>Total</td><td><strong>{{ pts.total }}</strong></td></tr>
+              </table>
+            {% else %}
+              <p>No hay puntos por fase calculados.</p>
+            {% endif %}
+
+            {% if fb and fb.overall_evaluation %}
+              <h4 style="margin-top: 15px">Comentarios Detallados</h4>
+              <p><strong>Evaluación general:</strong> {{ fb.overall_evaluation }}</p>
+              {% if fb.Areas_de_mejora %}
+                <p><strong>Áreas de Mejora:</strong></p>
+                <ul>
+                  {% for area in fb.Areas_de_mejora %}
+                    <li>{{ area }}</li>
+                  {% endfor %}
+                </ul>
+              {% endif %}
+            {% endif %}
+          </div>
         {% endif %}
       </div>
 
@@ -341,7 +380,7 @@
       </div>
     </div>
 
-    <!-- ===== RESUMEN DE DESEMPEÑO ===== -->
+    <!-- ===== RESUMEN DE DESEMPEÑO (sin columnas numéricas) ===== -->
     <h2 class="section-title">⭐ Resumen de Desempeño por Usuario</h2>
     <div class="summary-row">
       <table>
@@ -349,10 +388,6 @@
           <th>Nombre</th>
           <th>Email</th>
           <th>Sesiones consideradas</th>
-          <th>Puntaje promedio</th>
-          <th>Puntos Da Vinci (prom.)</th>
-          <th>% Fases aplicadas (prom.)</th>
-          <th>Conocimiento (legacy prom.)</th>
           <th>Alertas</th>
           <th>Última sesión</th>
         </tr>
@@ -362,16 +397,12 @@
             <td>{{ p.name }}</td>
             <td>{{ p.email }}</td>
             <td>{{ p.sessions_published }}</td>
-            <td><strong>{{ '%.1f'|format(p.avg_score) }}</strong></td>
-            <td>{{ '%.1f'|format(p.avg_dv_points) }}</td>
-            <td>{{ '%.0f'|format(p.avg_steps_pct) }}%</td>
-            <td>{{ '%.1f'|format(p.avg_legacy) }}/8</td>
             <td>{{ p.red_flags }}</td>
             <td>{{ p.last_date }}</td>
           </tr>
           {% endfor %}
         {% else %}
-          <tr><td colspan="9" style="text-align:center;color:#777">Sin datos aún</td></tr>
+          <tr><td colspan="5" style="text-align:center;color:#777">Sin datos aún</td></tr>
         {% endif %}
       </table>
     </div>
