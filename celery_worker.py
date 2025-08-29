@@ -207,7 +207,7 @@ def process_session_transcript(self, payload: dict):
 
     # 4) Evalúa y PERSISTE (evaluation_rh) vía evaluator
     try:
-        res = evaluate_and_persist(sid, user_txt, "", None)
+        res = evaluate_and_persist(sid, user_txt, user_txt, None)
         public_text = res.get("public", "Evaluación generada.")
         internal_preview = res.get("internal", {}) or {}
         dv_total = (internal_preview.get("da_vinci_points") or {}).get("total")

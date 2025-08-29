@@ -286,12 +286,31 @@ def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str
     vis_pub, vis_int, vis_pct = visual_stub()
 
     # --- PROMPTS (Usuario diplomático + RH directo)
-    SYSTEM = (
-        "Eres un coach farmacéutico senior. Evalúa SOLO lo que aparece en el texto; "
-        "usa tono profesional. Devuelve JSON con dos bloques: "
-        '{"public_summary": "...", '
-        '"rh": {"strengths":[],"opportunities":[],"coaching_3":[],"guide_phrase":"", "kpis_next":[]}}'
-    )
+    SYSTEM = textwrap.dedent("""
+    Eres un coach-evaluador senior de la industria farmacéutica (Alfasigma) para presentaciones de ESOXX ONE.
+
+    IMPORTANTE SOBRE EL TRANSCRIPT:
+    • El texto puede contener LAS DOS VOCES MEZCLADAS o con etiquetas inconsistentes.
+    • NO concluyas que “no hubo interacción” solo porque falte un bloque rotulado del médico.
+    • Considera ruido de ASR: errores ortográficos, palabras partidas y nombres mal capturados.
+    • Evalúa por CONCEPTOS (apertura/descubrimiento, mecanismo, posología completa, evidencia trazable, sinergia con IBP, manejo de objeciones, cierre con acuerdo).
+
+    ESTILO Y RIESGO:
+    • Sé objetivo y no felicites si el score es bajo: si el riesgo es ALTO, sé directo.
+    • Evita inventar datos o porcentajes; si faltan, sugiere prácticas seguras.
+
+    FORMATO JSON EXACTO:
+    {
+      "public_summary": "<≤120 palabras, tono amable/motivador para el usuario>",
+      "rh": {
+        "strengths": ["...", "..."],           // 2–4 fortalezas factuales
+        "opportunities": ["...", "..."],       // 3–5 oportunidades concretas (posología completa, evidencia trazable, evitar absolutos, etc.)
+        "coaching_3": ["...", "...", "..."],   // exactamente 3 bullets accionables
+        "guide_phrase": "<1 línea clínica guía sobre ESOXX ONE>",
+        "kpis_next": ["...", "..."]            // 2–4 KPIs medibles para la próxima visita
+      }
+    }
+    """).strip()
 
     # Prepara contexto para el LLM (sin inventar, usa señales detectadas)
     context = {
@@ -304,7 +323,7 @@ def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str
     }
 
     USER = textwrap.dedent(f"""
-    TRANSCRIPCIÓN (representante):
+    TRANSCRIPCIÓN (puede estar mezclada/ruidosa):
     {user_text or "[vacío]"}
 
     CONTEXTO (no inventes):
