@@ -112,14 +112,12 @@ def count_fuzzy_any(nt: str, phrases: List[str], thr: float = 0.82) -> int:
 # ─────────── Scoring config (claims + Da Vinci) ───────────
 WEIGHTED_KWS = {
     "3pt": [
-        "esoxx-one mejora hasta 90% todos los sintomas de la erge",
-        "esoxx-one reduce hasta 90% la frecuencia y severidad de los sintomas de erge",
         "esoxx-one demostro mejoria significativa de los sintomas esofagicos y extraesofagicos de la erge",
         "esoxx-one mas ibp es significativamente mas eficaz que la monoterapia con ibp para la epitelizacion esofagica",
         "reduce significativamente los sintomas de la erge vs monoterapia ibps",
         "alivio en menor tiempo (2 semanas vs 4 semanas)",
         "reduccion del uso de antiacidos",
-        "demostrado en ninos y adolescentes",
+
         "reduce la falla al tratamiento",
     ],
     "2pt": [
@@ -190,7 +188,7 @@ DAVINCI_POINTS = {
 }
 
 KW_LIST = ["beneficio", "estudio", "sintoma", "tratamiento", "reflujo", "mecanismo", "eficacia", "seguridad"]
-BAD_PHRASES = ["no se", "no tengo idea", "lo invento", "no lo estudie", "no estudie bien", "no conozco", "no me acuerdo"]
+BAD_PHRASES = ["no se", "no tengo idea", "lo invento", "no lo estudie", "no estudie bien", "no conozco", "no me acuerdo", "promoción", "promociones", "3x4", "4x3", "precio", "farmacias guadalajara", "cadenas", "el mejor", "completamente seguro", "totalmente seguro", "sin efectos secundarios", "no tiene interacciones", "todo tipo de pacientes", "embarazad", "pediatr", "niños", "niñas", "adolescentes"]
 LISTEN_KW  = [
     "entiendo", "comprendo", "veo que", "lo que dices", "si entiendo bien", "parafraseando",
     "que le preocupa", "me gustaria conocer", "que caracteristicas tienen", "podria contarme", "como describe a sus pacientes"
@@ -208,7 +206,6 @@ PRODUCT_RUBRIC: Dict[str, Dict[str, List[str] | int]] = {
     "eficacia": {
         "weight": 3,
         "phrases": [
-            "mejora hasta 90% todos los sintomas", "reduce hasta 90% la frecuencia y severidad",
             "alivio en menor tiempo", "reduce la falla al tratamiento", "reduce significativamente los sintomas",
             "sinergia con inhibidores de la bomba de protones", "ibp mas esoxx-one",
         ],
@@ -216,7 +213,7 @@ PRODUCT_RUBRIC: Dict[str, Dict[str, List[str] | int]] = {
     "evidencia": {
         "weight": 2,
         "phrases": [
-            "demostrado en ninos y adolescentes", "estudio", "evidencia", "mejoria significativa",
+
             "reduccion del uso de antiacidos", "epitelizacion esofagica",
         ],
     },
@@ -419,7 +416,7 @@ Texto:
 # ─────────── Evaluador principal ───────────
 def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str] = None) -> Dict[str, Any]:
     # 1) Visual
-    vis_pub, vis_int, vis_pct, vis_ratio = visual_analysis(video_path)
+    vis_pub, vis_int, vis_pct, vis_ratio = (visual_analysis(video_path) if EVAL_ENABLE_VIDEO else ('⚠️ Sin video evaluado por configuración.', 'Sin evaluación de video.', 0.0, 0.0))
 
     # 2) Reglas
     weighted    = score_weighted_phrases(user_text)
