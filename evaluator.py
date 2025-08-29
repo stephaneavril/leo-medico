@@ -21,6 +21,9 @@ from dotenv import load_dotenv
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY", ""))
 
+# Flag para activar/desactivar evaluación de video (por defecto OFF)
+EVAL_ENABLE_VIDEO = os.getenv("EVAL_ENABLE_VIDEO", "0").strip().lower() in {"1", "true", "yes", "on"}
+
 # ───────────────────────── Utils ─────────────────────────
 
 def normalize(txt: str) -> str:
@@ -101,7 +104,6 @@ WEIGHTED_KWS = {
     ],
 }
 
-# Ampliado con frases que aparecen en tus demos (más flexibles)
 DAVINCI_POINTS = {
     "preparacion": {
         2: ["objetivo smart", "mi objetivo hoy es", "metas smart"],
@@ -264,11 +266,23 @@ def interaction_quality(t: str) -> Dict[str, object]:
 # ─────────── Visual express ───────────
 
 def visual_analysis(path: str):
-    MAX_FRAMES = int(os.getenv("MAX_FRAMES_TO_CHECK", 60))
+    """
+    Devuelve 4 valores:
+    (pub_msg: str, internal_tag: str, pct_str: str, ratio_float: float)
+    """
     try:
+        MAX_FRAMES = int(os.getenv("MAX_FRAMES_TO_CHECK", 60))
+    except Exception:
+        MAX_FRAMES = 60
+
+    try:
+        if not cv2 or not path or not os.path.exists(path):
+            return "⚠️ Sin video disponible.", "No evaluado", "N/A", 0.0
+
         cap = cv2.VideoCapture(path)
         if not cap.isOpened():
-            return "⚠️ No se pudo abrir video.", "Error video", "N/A"
+            return "⚠️ No se pudo abrir video.", "Error video", "N/A", 0.0
+
         frontal = total = 0
         face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
         for _ in range(MAX_FRAMES):
@@ -281,17 +295,19 @@ def visual_analysis(path: str):
             if len(faces):
                 frontal += 1
         cap.release()
+
         if not total:
-            return "⚠️ Sin frames para analizar.", "Sin frames", "0.0%"
+            return "⚠️ Sin frames para analizar.", "Sin frames", "0.0%", 0.0
+
         ratio = frontal / total
-        pct = f"{ratio*100:.1f}%"
+        pct_str = f"{ratio*100:.1f}%"
         if ratio >= 0.7:
-            return "✅ Buena presencia frente a cámara.", "Correcta", pct
+            return "✅ Buena presencia frente a cámara.", "Correcta", pct_str, ratio
         if ratio > 0:
-            return "⚠️ Mejora la visibilidad.", "Mejorar visibilidad", pct
-        return "❌ No se detectó rostro.", "No detectado", pct
+            return "⚠️ Mejora la visibilidad.", "Mejorar visibilidad", pct_str, ratio
+        return "❌ No se detectó rostro.", "No detectado", pct_str, ratio
     except Exception as e:
-        return f"⚠️ Error visual: {e}", "Error video", "N/A"
+        return f"⚠️ Error visual: {e}", "Error video", "N/A", 0.0
 
 # ─────────── BD ───────────
 
@@ -326,11 +342,15 @@ def _validate_internal(internal: dict, user_text: str) -> dict:
 
 def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str] = None) -> Dict[str, object]:
     # Visual
-    vis_pub, vis_int, vis_pct = (
-        visual_analysis(video_path)
-        if video_path and cv2 and os.path.exists(video_path)
-        else ("⚠️ Sin video disponible.", "No evaluado", "N/A")
-    )
+    if EVAL_ENABLE_VIDEO and video_path and cv2 and os.path.exists(video_path):
+        vis_pub, vis_int, vis_pct, vis_ratio = visual_analysis(video_path)
+    else:
+        vis_pub, vis_int, vis_pct, vis_ratio = (
+            "⚠️ Sin video evaluado por configuración.",
+            "Sin evaluación de video.",
+            "N/A",
+            0.0,
+        )
 
     # Señales Da Vinci (% aplicado)
     PHRASE_MAP = {
@@ -349,9 +369,9 @@ def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str
     steps_applied_pct = round(100.0 * steps_applied_count / 5.0, 1)
 
     # Puntuaciones propias
-    weighted   = score_weighted_phrases(user_text)
+    weighted    = score_weighted_phrases(user_text)
     davinci_pts = score_davinci_points(user_text)
-    legacy_8   = kw_score(user_text)
+    legacy_8    = kw_score(user_text)
 
     # Calidad + producto
     iq = interaction_quality(user_text)
