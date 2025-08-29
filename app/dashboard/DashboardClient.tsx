@@ -206,6 +206,29 @@ export default function DashboardClient({
         }
         .howto-box ol{ margin: 8px 0 0; padding-left: 20px; line-height: 1.6; }
         .howto-box li{ margin: 6px 0; }
+
+        /* ⚠️ Aviso temporal (paso adicional) */
+        .notice-callout{
+          display: flex;
+          gap: 12px;
+          align-items: flex-start;
+          background: #fff8e6;
+          border: 1px solid #ffd27a;
+          border-left: 6px solid #ff9f0a;
+          color: #5a4100;
+          border-radius: 12px;
+          padding: 14px 16px;
+          box-shadow: 0 6px 18px var(--shadow-lg);
+          margin: 0 0 18px;
+        }
+        .notice-callout strong { color: #4a3500; }
+        .notice-badge{
+          min-width: 28px; height: 28px; border-radius: 50%;
+          background: #ff9f0a; color:#fff; display:flex; align-items:center; justify-content:center;
+          font-weight: 800; margin-top: 2px;
+        }
+        .notice-steps{ margin: 0; padding-left: 18px; line-height: 1.55; }
+        .notice-steps li{ margin: 4px 0; }
       `}</style>
 
       <div className="dashboard-page-container">
@@ -216,6 +239,23 @@ export default function DashboardClient({
 
         <div className="container-content">
           <h2 className="section-title">Selecciona tu entrenamiento</h2>
+
+          {/* ⚠️ Aviso temporal: paso adicional para activar micrófono */}
+          <section className="notice-callout" role="status" aria-live="polite">
+            <div className="notice-badge">!</div>
+            <div>
+              <p style={{margin: 0}}>
+                <strong>Aviso:</strong> por ahora hay un <strong>paso adicional</strong> para que tu computadora
+                entienda que quieres hablar con el avatar.
+              </p>
+              <ol className="notice-steps">
+                <li>Al entrar, haz clic en <strong>Iniciar Chat de Voz</strong>.</li>
+                <li>Cuando veas al avatar y tu cámara, haz clic en <strong>Text Chat</strong>.</li>
+                <li>Inmediatamente vuelve a hacer clic en <strong>Voice Chat</strong>.</li>
+              </ol>
+              <p style={{margin: '6px 0 0'}}>Desde ese momento, puedes decir: <em>“Hola, doctora”</em> y te responderá por voz.</p>
+            </div>
+          </section>
 
           {/* === Pasos de uso (restaurados) === */}
           <section className="howto-box">
