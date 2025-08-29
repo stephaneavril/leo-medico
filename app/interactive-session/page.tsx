@@ -22,7 +22,7 @@ import {
 } from '@/components/logic';
 
 import { Button } from '@/components/Button';
-import { AvatarConfig } from '@/components/AvatarConfig';
+  import { AvatarConfig } from '@/components/AvatarConfig';
 import { AvatarVideo } from '@/components/AvatarSession/AvatarVideo';
 import { AvatarControls } from '@/components/AvatarSession/AvatarControls';
 import { LoadingIcon } from '@/components/Icons';
@@ -38,15 +38,14 @@ const DEFAULT_CONFIG: StartAvatarRequest = {
   knowledgeId: '13f254b102cf436d8c07b9fb617dbadf',
   language: 'es',
   voice: {
-    voiceId: '1edf8ae6571d46c8b7e719eaa91f93c6', // tu voz
+    voiceId: '1edf8ae6571d46c8b7e719eaa91f93c6',
     model: ElevenLabsModel.eleven_multilingual_v2,
     rate: 1.15,
     emotion: VoiceEmotion.FRIENDLY,
   },
-  // Mantén WEBSOCKET (tu SDK no exporta WEBRTC)
+  // Tu SDK soporta WS (mantener)
   voiceChatTransport: VoiceChatTransport.WEBSOCKET,
-
-  // ⚠️ Quitar STT forzado por ahora (dejamos el default de HeyGen)
+  // Deja el STT por defecto (no forzar Deepgram por ahora)
   // sttSettings: { provider: STTProvider.DEEPGRAM },
 };
 
@@ -80,6 +79,7 @@ function InteractiveSessionContent() {
   const [isAttemptingAutoStart, setIsAttemptingAutoStart] = useState(false);
   const [hasUserMediaPermission, setHasUserMediaPermission] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [isVoiceActive, setIsVoiceActive] = useState(false); // ← nuevo
 
   // ── Refs ─────────────────────────────────────────────────────
   const recordingTimerRef = useRef<number>(480);
@@ -154,6 +154,7 @@ function InteractiveSessionContent() {
       setIsUploading(true);
 
       stopAvatar();
+      setIsVoiceActive(false); // ← apaga flag voz
 
       const finalize = async () => {
         stopUserCameraRecording();
@@ -239,7 +240,7 @@ function InteractiveSessionContent() {
         const heygenToken = await fetchAccessToken();
         const avatar = initAvatar(heygenToken);
 
-        // Logs para verificar ciclo Voz→Texto y TTS
+        // Logs para diagnosticar
         avatar.on(StreamingEvents.USER_TALKING_MESSAGE, (e) => {
           console.log('USER_STT:', e.detail);
           handleUserTalkingMessage({ detail: e.detail });
@@ -251,20 +252,22 @@ function InteractiveSessionContent() {
 
         avatar.on(StreamingEvents.STREAM_DISCONNECTED, () => {
           if (!isFinalizingRef.current) stopAndFinalizeSession(messagesRef.current);
+          setIsVoiceActive(false);
         });
 
-        // Arrancar la VOZ cuando el stream ya está listo (evita carrera de autoplay)
+        // Arranca VOZ sólo cuando el stream está listo
         avatar.on(StreamingEvents.STREAM_READY, async () => {
           setIsAttemptingAutoStart(false);
 
-          // TTS corto de confirmación (opcional pero útil)
+          // Confirmación audible
           try {
             await (avatar as any)?.speakText?.('Hola, ya te escucho. Cuando quieras, empezamos.');
           } catch {}
 
           if (withVoice) {
             try {
-              await startVoiceChat(); // ← aquí se enciende STT
+              await startVoiceChat();        // enciende STT
+              setIsVoiceActive(true);
               console.log('startVoiceChat OK');
             } catch (e) {
               console.error('startVoiceChat falló:', e);
@@ -272,7 +275,7 @@ function InteractiveSessionContent() {
           }
         });
 
-        await startAvatar(config); // levanta el stream del avatar
+        await startAvatar(config); // levanta el stream
         // NOTA: no llames startVoiceChat aquí; ya lo hacemos en STREAM_READY
       } catch (err: any) {
         console.error('Error iniciando sesión con HeyGen:', err);
@@ -293,6 +296,25 @@ function InteractiveSessionContent() {
       handleStreamingTalkingMessage,
     ]
   );
+
+  // ── “Voice Chat” cuando ya hay sesión (atajo) ────────────────
+  const handleVoiceChatClick = useCallback(async () => {
+    if (!hasUserMediaPermission) {
+      alert('Por favor, permite el acceso a la cámara y el micrófono.');
+      return;
+    }
+    if (sessionState === StreamingAvatarSessionState.CONNECTED) {
+      try {
+        await startVoiceChat();
+        setIsVoiceActive(true);
+        console.log('startVoiceChat OK (sesión ya conectada)');
+      } catch (e) {
+        console.error('startVoiceChat falló:', e);
+      }
+    } else {
+      startHeyGenSession(true); // inicia todo con voz
+    }
+  }, [hasUserMediaPermission, sessionState, startVoiceChat, startHeyGenSession]);
 
   // ── Get user media on mount ─────────────────────────────────
   useEffect(() => {
@@ -342,7 +364,9 @@ function InteractiveSessionContent() {
     if (sessionState === StreamingAvatarSessionState.CONNECTED) {
       id = setInterval(() => {
         recordingTimerRef.current -= 1;
-        const m = Math.floor(recordingTimerRef.current / 60).toString().padStart(2, '0');
+        const m = Math.floor(recordingTimerRef.current / 60)
+          .toString()
+          .padStart(2, '0');
         const s = (recordingTimerRef.current % 60).toString().padStart(2, '0');
         setTimerDisplay(`${m}:${s}`);
         if (recordingTimerRef.current <= 0) {
@@ -389,7 +413,9 @@ function InteractiveSessionContent() {
         <p className="text-zinc-300 mb-6">Solicitando permisos...</p>
       )}
       {showAutoplayBlockedMessage && (
-        <div className="text-red-400 mb-6 text-center">Permisos de cámara/micrófono denegados o no disponibles.</div>
+        <div className="text-red-400 mb-6 text-center">
+          Permisos de cámara/micrófono denegados o no disponibles.
+        </div>
       )}
 
       {/* Video area */}
@@ -440,16 +466,29 @@ function InteractiveSessionContent() {
 
       {/* Controls */}
       <div className="flex flex-col gap-3 items-center justify-center p-4 border-t border-zinc-700 w-full mt-6">
+        {/* Arranque inicial */}
         {sessionState === StreamingAvatarSessionState.INACTIVE && !showAutoplayBlockedMessage && (
           <div className="flex flex-row gap-4">
-            <Button onClick={() => startHeyGenSession(true)} disabled={isAttemptingAutoStart || !hasUserMediaPermission}>
+            <Button
+              onClick={handleVoiceChatClick}
+              disabled={isAttemptingAutoStart || !hasUserMediaPermission}
+            >
               Iniciar Chat de Voz
             </Button>
-            <Button onClick={() => startHeyGenSession(false)} disabled={isAttemptingAutoStart || !hasUserMediaPermission}>
+            <Button
+              onClick={() => startHeyGenSession(false)}
+              disabled={isAttemptingAutoStart || !hasUserMediaPermission}
+            >
               Iniciar Chat de Texto
             </Button>
           </div>
         )}
+
+        {/* Si ya estoy conectado pero la voz aún no está activa, muestro botón para encender mic */}
+        {sessionState === StreamingAvatarSessionState.CONNECTED && !isVoiceActive && (
+          <Button onClick={handleVoiceChatClick}>Encender voz</Button>
+        )}
+
         {sessionState === StreamingAvatarSessionState.CONNECTED && (
           <>
             <AvatarControls />
