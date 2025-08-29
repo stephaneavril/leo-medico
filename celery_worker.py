@@ -1,19 +1,4 @@
 # === celery_worker.py — Eval con o sin video (fallback a transcript en BD) ===
-"""
-Flujo resumido
---------------
-- Recibe payload con: session_id (obligatorio), video_object_key (opcional), timestamp_iso (opcional)
-- Si viene video_object_key:
-    1) [Opcional] Descarga de S3 (si AWS_* configurado)
-    2) (Opcional) Extrae audio / transcribe si lo necesitas (hook disponible)
-    3) Llama a evaluate_and_persist(session_id, user_text, leo_text="", video_path o None)
-    4) Actualiza SOLO el bloque 'evaluation' público y metadatos
-- Si NO viene video_object_key:
-    • Fallback: intenta leer 'avatar_transcript' (y si no, 'message') desde la BD
-    • Evalúa igual (texto-solo) y actualiza bloque público
-- Nunca pisa 'evaluation_rh' (lo guarda evaluator.evaluate_and_persist)
-"""
-
 from __future__ import annotations
 
 import os
@@ -26,18 +11,21 @@ from typing import Optional
 
 import psycopg2
 import boto3
-
 from celery import Celery
 
-# ---------- Config básica ----------
+# ─────────────────── CONFIG ───────────────────
 LOG_LEVEL = os.getenv("EVAL_LOG_LEVEL", "INFO").upper()
 logging.basicConfig(level=LOG_LEVEL, format="%(asctime)s [%(levelname)s] %(message)s")
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("leo_worker")
 
 DATABASE_URL = os.getenv("DATABASE_URL", "")
-REDIS_URL    = os.getenv("REDIS_URL", os.getenv("CELERY_BROKER_URL", "")) or "redis://localhost:6379/0"
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL env var not set")
 
-# AWS (opcional para descargar el video)
+# Broker/backend (Render ya te inyecta REDIS_URL)
+REDIS_URL = os.getenv("REDIS_URL", os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0"))
+
+# S3 (opcional, solo si quieres descargar el video)
 AWS_S3_BUCKET_NAME     = (os.getenv("AWS_S3_BUCKET_NAME", "").split("#", 1)[0]).strip().strip("'\"")
 AWS_S3_REGION_NAME     = os.getenv("AWS_S3_REGION_NAME", "us-east-1")
 AWS_ACCESS_KEY_ID      = os.getenv("AWS_ACCESS_KEY_ID")
@@ -46,44 +34,38 @@ AWS_SECRET_ACCESS_KEY  = os.getenv("AWS_SECRET_ACCESS_KEY")
 TMP_DIR = os.getenv("TEMP_PROCESSING_FOLDER", "/tmp/leo_trainer_processing")
 os.makedirs(TMP_DIR, exist_ok=True)
 
-# ---------- Instancia Celery ----------
-# Usa SIEMPRE la misma instancia para crear y registrar tareas
-app = Celery(
-    "leo_worker",
+# ───────────────── Celery APP ─────────────────
+# ⚠️ Igual que el worker “que sí funciona”: forzamos a Celery a importar este módulo.
+celery_app = Celery(
+    "leo_tasks",
     broker=REDIS_URL,
     backend=os.getenv("CELERY_RESULT_BACKEND", REDIS_URL),
 )
+celery_app.conf.imports = ("celery_worker",)  # <- clave para que registre tareas de este módulo
+# (Opcional) deja todo en la cola por defecto “celery”
+celery_app.conf.task_default_queue = "celery"
 
-# Alias para que tu comando de Render siga funcionando tal cual:
-# celery -A celery_worker:celery_app worker ...
-celery_app = app
+# ──────────────── Evaluator import ────────────
+# Mantiene tu interfaz: evaluate_and_persist(session_id, user_text, avatar_text, video_path)
+from evaluator import evaluate_and_persist
 
-# Config defensiva (opcional, no rompe nada)
-app.conf.update(
-    task_default_queue="celery",
-    task_routes={"process_session_transcript": {"queue": "celery"}},
-)
-
-__all__ = ["app", "celery_app"]
-
-# ---------- DB helpers ----------
+# ──────────────── DB helpers ──────────────────
 def db_conn():
-    if not DATABASE_URL:
-        raise ValueError("DATABASE_URL env var is required")
-    parsed = urlparse(DATABASE_URL)
+    p = urlparse(DATABASE_URL)
     return psycopg2.connect(
-        database=parsed.path[1:],
-        user=parsed.username,
-        password=parsed.password,
-        host=parsed.hostname,
-        port=parsed.port,
+        database=p.path.lstrip("/"),
+        user=p.username,
+        password=p.password,
+        host=p.hostname,
+        port=p.port,
         sslmode="require",
     )
 
-def _update_db_only_public(session_id: int, public_text: str, duration_seconds: Optional[int], audio_key: Optional[str], ts_iso: Optional[str]):
-    """
-    Actualiza SOLO el bloque público y metadatos. NO pisa evaluation_rh.
-    """
+def _update_db_only_public(session_id: int, public_text: str,
+                           duration_seconds: Optional[int],
+                           audio_key: Optional[str],
+                           ts_iso: Optional[str]):
+    """Actualiza SOLO 'evaluation' + metadatos. NO pisa evaluation_rh."""
     try:
         conn = db_conn()
         cur  = conn.cursor()
@@ -96,38 +78,35 @@ def _update_db_only_public(session_id: int, public_text: str, duration_seconds: 
                    timestamp = COALESCE(%s, timestamp)
              WHERE id = %s;
             """,
-            (public_text, duration_seconds, audio_key, ts_iso, session_id)
+            (public_text, duration_seconds, audio_key, ts_iso, session_id),
         )
         conn.commit()
         conn.close()
-        logger.info("✓ Actualizado bloque público de session_id=%s", session_id)
+        logger.info("✓ Public eval actualizada (session_id=%s)", session_id)
     except Exception as e:
         logger.exception("No se pudo actualizar bloque público (session_id=%s): %s", session_id, e)
 
 def _get_transcript_from_db(session_id: int) -> str:
     """
-    Intenta leer avatar_transcript (texto plano).
-    Si no existe, intenta 'message' (que podría ser JSON o texto).
+    Usa avatar_transcript si existe; si no, intenta 'message' (puede ser JSON array).
+    Compacta espacios y recorta a 24k chars.
     """
     txt = ""
     try:
         conn = db_conn()
         cur  = conn.cursor()
-        # 1) avatar_transcript
         cur.execute("SELECT avatar_transcript FROM interactions WHERE id=%s;", (session_id,))
         row = cur.fetchone()
         if row and row[0]:
             txt = str(row[0])
 
-        # 2) fallback: message
         if not txt or len(txt.strip()) < 2:
             cur.execute("SELECT message FROM interactions WHERE id=%s;", (session_id,))
             row = cur.fetchone()
             if row and row[0]:
-                val = row[0]
-                # Puede venir como JSON (lista de turnos) o como texto
+                raw = row[0]
                 try:
-                    data = json.loads(val)
+                    data = json.loads(raw)
                     if isinstance(data, list):
                         txt = " ".join(map(str, data))
                     elif isinstance(data, dict):
@@ -135,20 +114,18 @@ def _get_transcript_from_db(session_id: int) -> str:
                     else:
                         txt = str(data)
                 except Exception:
-                    txt = str(val)
-
+                    txt = str(raw)
         conn.close()
     except Exception as e:
         logger.exception("Error leyendo transcript de BD (session_id=%s): %s", session_id, e)
 
-    # Compactar espacios y recortar para tokens
     txt = re.sub(r"\s+", " ", txt or "").strip()
     MAX_CHARS = 24000
     if len(txt) > MAX_CHARS:
         txt = txt[-MAX_CHARS:]
     return txt
 
-# ---------- S3 helper (opcional) ----------
+# ──────────────── S3 helpers (opcional) ───────
 def _s3_client() -> Optional[boto3.client]:
     if not (AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY and AWS_S3_BUCKET_NAME):
         return None
@@ -160,10 +137,6 @@ def _s3_client() -> Optional[boto3.client]:
     )
 
 def _maybe_download_from_s3(object_key: str) -> Optional[str]:
-    """
-    Descarga el objeto a /tmp si las credenciales están configuradas.
-    Devuelve ruta local o None si no descargó.
-    """
     try:
         s3 = _s3_client()
         if not s3:
@@ -177,20 +150,14 @@ def _maybe_download_from_s3(object_key: str) -> Optional[str]:
         logger.warning("No se pudo descargar de S3 (%s): %s", object_key, e)
         return None
 
-# ---------- Import del evaluator ----------
-from evaluator import evaluate_and_persist
-
-# ---------- Tarea principal ----------
-@app.task(name="process_session_transcript", bind=True)
-def process_session_transcript(self, payload: dict):
+# ──────────────── Lógica central ──────────────
+def _process_session_transcript_logic(payload: dict):
     """
-    payload esperado:
-    {
-        "session_id": int,
-        "video_object_key": "s3/key/opcional" | None,
-        "timestamp_iso": "YYYY-MM-DDTHH:MM:SSZ" | None,
-        "user_text": "opcional, si ya viene transcript listo"
-    }
+    payload:
+      - session_id (int)   [obligatorio]
+      - video_object_key   [opcional]
+      - timestamp_iso      [opcional]
+      - user_text          [opcional: si ya viene transcript consolidado]
     """
     try:
         sid = int(payload.get("session_id") or 0)
@@ -201,39 +168,29 @@ def process_session_transcript(self, payload: dict):
         return
 
     vkey: Optional[str] = payload.get("video_object_key")
-    ts_iso: Optional[str] = payload.get("timestamp_iso")
-    if not ts_iso:
-        ts_iso = datetime.utcnow().isoformat()
-
-    # Por si el frontend ya mandó texto procesado:
+    ts_iso: Optional[str] = payload.get("timestamp_iso") or datetime.utcnow().isoformat()
     user_txt = payload.get("user_text") or ""
 
-    # 1) Si NO hay video —> FALLBACK a BD (avatar_transcript/message)
+    # Si no hay video: caemos a transcript desde BD
     if not vkey:
         logger.warning("🚫 session %s: falta video_object_key — uso transcript en BD", sid)
         if not user_txt:
             user_txt = _get_transcript_from_db(sid)
-
-        # Evalúa AÚN SIN VIDEO
         try:
             res = evaluate_and_persist(sid, user_txt, "", None)
             public_text = res.get("public", "Evaluación generada (sin video).")
         except Exception as e:
             logger.exception("[EVALUATE_PERSIST sin video] sid=%s error=%s", sid, e)
             public_text = "⚠️ Evaluación automática no disponible."
-
         _update_db_only_public(sid, public_text, duration_seconds=None, audio_key=None, ts_iso=ts_iso)
         return
 
-    # 2) Si hay video —> (opcional) descarga y procesa
+    # Si hay video, descarga (opcional). Evaluamos igual por transcript (sin ASR aquí).
     local_video: Optional[str] = _maybe_download_from_s3(vkey)
 
-    # TODO: Si quieres ASR aquí, implementa extracción de audio y transcripción.
-    # Para mantenerlo simple y robusto, leemos de BD si no llega 'user_text'.
     if not user_txt:
         user_txt = _get_transcript_from_db(sid)
 
-    # Eval con o sin video_path
     try:
         res = evaluate_and_persist(sid, user_txt, "", local_video)
         public_text = res.get("public", "Evaluación generada.")
@@ -241,39 +198,38 @@ def process_session_transcript(self, payload: dict):
         logger.exception("[EVALUATE_PERSIST con video] sid=%s error=%s", sid, e)
         public_text = "⚠️ Evaluación automática no disponible."
 
-    # Metadatos: si no tienes duración real, déjalo en None para no pisar
     _update_db_only_public(sid, public_text, duration_seconds=None, audio_key=vkey, ts_iso=ts_iso)
 
-    # Limpieza local
+    # Limpieza
     try:
         if local_video and os.path.exists(local_video):
             os.remove(local_video)
     except Exception:
         pass
 
+# ──────────────── REGISTRO DE TAREAS ──────────
+# 1) Nombre totalmente calificado (como tu ejemplo que sí funciona)
+@celery_app.task(name="celery_worker.process_session_transcript", bind=True)
+def task_fqdn(self, payload: dict):
+    return _process_session_transcript_logic(payload)
 
-# ---------- Registro defensivo de la tarea ----------
-# Si por cualquier motivo el decorador no se ejecutó en import-time,
-# garantizamos que la tarea esté registrada en ESTA instancia.
-if "process_session_transcript" not in app.tasks:
-    app.tasks.register(process_session_transcript)
-    logger.info("Registro defensivo: process_session_transcript añadido a app.tasks")
+# 2) Alias no calificado (como el que vi en tu log de error)
+@celery_app.task(name="process_session_transcript", bind=True)
+def task_alias(self, payload: dict):
+    return _process_session_transcript_logic(payload)
 
-# ---------- Utilidad manual (opcional) ----------
+# ──────────────── CLI manual ──────────────────
 if __name__ == "__main__":
-    # Pequeña prueba manual (invocar como script)
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("--session_id", type=int, required=True)
     ap.add_argument("--video_object_key", type=str, default="")
     ap.add_argument("--user_text", type=str, default="")
     args = ap.parse_args()
-
     payload = {
         "session_id": args.session_id,
         "video_object_key": args.video_object_key or None,
         "user_text": args.user_text or None,
         "timestamp_iso": datetime.utcnow().isoformat()
     }
-    # Con bind=True, usa .run(...) para ejecutar síncrono sin broker
-    process_session_transcript.run(payload)
+    _process_session_transcript_logic(payload)
