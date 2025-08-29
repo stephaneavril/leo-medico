@@ -19,13 +19,15 @@ from __future__ import annotations
 import os
 import re
 import json
-import boto3
-import psycopg2
 import logging
 from datetime import datetime
 from urllib.parse import urlparse
-from celery import Celery
 from typing import Optional
+
+import psycopg2
+import boto3
+
+from celery import Celery
 
 # ---------- Config básica ----------
 LOG_LEVEL = os.getenv("EVAL_LOG_LEVEL", "INFO").upper()
@@ -44,11 +46,25 @@ AWS_SECRET_ACCESS_KEY  = os.getenv("AWS_SECRET_ACCESS_KEY")
 TMP_DIR = os.getenv("TEMP_PROCESSING_FOLDER", "/tmp/leo_trainer_processing")
 os.makedirs(TMP_DIR, exist_ok=True)
 
-celery_app = Celery(
+# ---------- Instancia Celery ----------
+# Usa SIEMPRE la misma instancia para crear y registrar tareas
+app = Celery(
     "leo_worker",
     broker=REDIS_URL,
     backend=os.getenv("CELERY_RESULT_BACKEND", REDIS_URL),
 )
+
+# Alias para que tu comando de Render siga funcionando tal cual:
+# celery -A celery_worker:celery_app worker ...
+celery_app = app
+
+# Config defensiva (opcional, no rompe nada)
+app.conf.update(
+    task_default_queue="celery",
+    task_routes={"process_session_transcript": {"queue": "celery"}},
+)
+
+__all__ = ["app", "celery_app"]
 
 # ---------- DB helpers ----------
 def db_conn():
@@ -84,6 +100,7 @@ def _update_db_only_public(session_id: int, public_text: str, duration_seconds: 
         )
         conn.commit()
         conn.close()
+        logger.info("✓ Actualizado bloque público de session_id=%s", session_id)
     except Exception as e:
         logger.exception("No se pudo actualizar bloque público (session_id=%s): %s", session_id, e)
 
@@ -154,6 +171,7 @@ def _maybe_download_from_s3(object_key: str) -> Optional[str]:
             return None
         local_path = os.path.join(TMP_DIR, os.path.basename(object_key))
         s3.download_file(AWS_S3_BUCKET_NAME, object_key, local_path)
+        logger.info("Descargado de S3: %s -> %s", object_key, local_path)
         return local_path
     except Exception as e:
         logger.warning("No se pudo descargar de S3 (%s): %s", object_key, e)
@@ -163,8 +181,8 @@ def _maybe_download_from_s3(object_key: str) -> Optional[str]:
 from evaluator import evaluate_and_persist
 
 # ---------- Tarea principal ----------
-@celery_app.task(name="process_session_transcript")
-def process_session_transcript(payload: dict):
+@app.task(name="process_session_transcript", bind=True)
+def process_session_transcript(self, payload: dict):
     """
     payload esperado:
     {
@@ -174,7 +192,10 @@ def process_session_transcript(payload: dict):
         "user_text": "opcional, si ya viene transcript listo"
     }
     """
-    sid = int(payload.get("session_id") or 0)
+    try:
+        sid = int(payload.get("session_id") or 0)
+    except Exception:
+        sid = 0
     if not sid:
         logger.error("payload sin session_id: %r", payload)
         return
@@ -231,6 +252,13 @@ def process_session_transcript(payload: dict):
         pass
 
 
+# ---------- Registro defensivo de la tarea ----------
+# Si por cualquier motivo el decorador no se ejecutó en import-time,
+# garantizamos que la tarea esté registrada en ESTA instancia.
+if "process_session_transcript" not in app.tasks:
+    app.tasks.register(process_session_transcript)
+    logger.info("Registro defensivo: process_session_transcript añadido a app.tasks")
+
 # ---------- Utilidad manual (opcional) ----------
 if __name__ == "__main__":
     # Pequeña prueba manual (invocar como script)
@@ -247,4 +275,5 @@ if __name__ == "__main__":
         "user_text": args.user_text or None,
         "timestamp_iso": datetime.utcnow().isoformat()
     }
-    process_session_transcript(payload)
+    # Con bind=True, usa .run(...) para ejecutar síncrono sin broker
+    process_session_transcript.run(payload)
