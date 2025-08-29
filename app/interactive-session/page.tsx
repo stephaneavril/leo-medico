@@ -10,7 +10,6 @@ import {
   VoiceChatTransport,
   VoiceEmotion,
   StartAvatarRequest,
-  // STTProvider,      // ← quitado para usar el STT por defecto de HeyGen
   ElevenLabsModel,
 } from '@heygen/streaming-avatar';
 
@@ -39,16 +38,15 @@ const DEFAULT_CONFIG: StartAvatarRequest = {
   knowledgeId: '13f254b102cf436d8c07b9fb617dbadf',
   language: 'es',
   voice: {
-    // Usa la voz que prefieras; ésta es la que pegaste
-    voiceId: '1edf8ae6571d46c8b7e719eaa91f93c6',
+    voiceId: '1edf8ae6571d46c8b7e719eaa91f93c6', // tu voz
     model: ElevenLabsModel.eleven_multilingual_v2,
     rate: 1.15,
     emotion: VoiceEmotion.FRIENDLY,
   },
-  // Cambiamos a WEBRTC para evitar firewalls que bloquean WebSocket (subida de micrófono)
-  voiceChatTransport: VoiceChatTransport.WEBRTC,
+  // Mantén WEBSOCKET (tu SDK no exporta WEBRTC)
+  voiceChatTransport: VoiceChatTransport.WEBSOCKET,
 
-  // Deja el STT por defecto (comenta/borra si antes forzabas Deepgram):
+  // ⚠️ Quitar STT forzado por ahora (dejamos el default de HeyGen)
   // sttSettings: { provider: STTProvider.DEEPGRAM },
 };
 
@@ -81,7 +79,7 @@ function InteractiveSessionContent() {
   const [showAutoplayBlockedMessage, setShowAutoplayBlockedMessage] = useState(false);
   const [isAttemptingAutoStart, setIsAttemptingAutoStart] = useState(false);
   const [hasUserMediaPermission, setHasUserMediaPermission] = useState(false);
-  const [isUploading, setIsUploading] = useState(false); // overlay flag
+  const [isUploading, setIsUploading] = useState(false);
 
   // ── Refs ─────────────────────────────────────────────────────
   const recordingTimerRef = useRef<number>(480);
@@ -153,7 +151,7 @@ function InteractiveSessionContent() {
     async (sessionMessages: any[]) => {
       if (isFinalizingRef.current || !sessionInfo) return;
       isFinalizingRef.current = true;
-      setIsUploading(true); // muestra overlay
+      setIsUploading(true);
 
       stopAvatar();
 
@@ -241,7 +239,7 @@ function InteractiveSessionContent() {
         const heygenToken = await fetchAccessToken();
         const avatar = initAvatar(heygenToken);
 
-        // Logs útiles
+        // Logs para verificar ciclo Voz→Texto y TTS
         avatar.on(StreamingEvents.USER_TALKING_MESSAGE, (e) => {
           console.log('USER_STT:', e.detail);
           handleUserTalkingMessage({ detail: e.detail });
@@ -255,18 +253,18 @@ function InteractiveSessionContent() {
           if (!isFinalizingRef.current) stopAndFinalizeSession(messagesRef.current);
         });
 
-        // Cuando el stream está listo, levantamos la VOZ (STT)
+        // Arrancar la VOZ cuando el stream ya está listo (evita carrera de autoplay)
         avatar.on(StreamingEvents.STREAM_READY, async () => {
           setIsAttemptingAutoStart(false);
 
-          // TTS de confirmación (opcional)
+          // TTS corto de confirmación (opcional pero útil)
           try {
             await (avatar as any)?.speakText?.('Hola, ya te escucho. Cuando quieras, empezamos.');
           } catch {}
 
           if (withVoice) {
             try {
-              await startVoiceChat(); // ← aquí enciende STT + gestión de turnos
+              await startVoiceChat(); // ← aquí se enciende STT
               console.log('startVoiceChat OK');
             } catch (e) {
               console.error('startVoiceChat falló:', e);
@@ -274,8 +272,8 @@ function InteractiveSessionContent() {
           }
         });
 
-        await startAvatar(config); // levantamos el stream del avatar
-        // NOTA: ya no llamamos startVoiceChat aquí; ahora va en STREAM_READY
+        await startAvatar(config); // levanta el stream del avatar
+        // NOTA: no llames startVoiceChat aquí; ya lo hacemos en STREAM_READY
       } catch (err: any) {
         console.error('Error iniciando sesión con HeyGen:', err);
         setShowAutoplayBlockedMessage(true);
@@ -344,9 +342,7 @@ function InteractiveSessionContent() {
     if (sessionState === StreamingAvatarSessionState.CONNECTED) {
       id = setInterval(() => {
         recordingTimerRef.current -= 1;
-        const m = Math.floor(recordingTimerRef.current / 60)
-          .toString()
-          .padStart(2, '0');
+        const m = Math.floor(recordingTimerRef.current / 60).toString().padStart(2, '0');
         const s = (recordingTimerRef.current % 60).toString().padStart(2, '0');
         setTimerDisplay(`${m}:${s}`);
         if (recordingTimerRef.current <= 0) {
@@ -393,9 +389,7 @@ function InteractiveSessionContent() {
         <p className="text-zinc-300 mb-6">Solicitando permisos...</p>
       )}
       {showAutoplayBlockedMessage && (
-        <div className="text-red-400 mb-6 text-center">
-          Permisos de cámara/micrófono denegados o no disponibles.
-        </div>
+        <div className="text-red-400 mb-6 text-center">Permisos de cámara/micrófono denegados o no disponibles.</div>
       )}
 
       {/* Video area */}
