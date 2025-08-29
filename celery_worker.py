@@ -1,235 +1,255 @@
-# === celery_worker.py — Eval con o sin video (fallback a transcript en BD) ===
-from __future__ import annotations
+# === celery_worker.py — Transcript-only + Persistencia vía evaluator ===
+"""
+Flujo:
+1) Descarga .webm de S3.
+2) Extrae audio a .wav mono 16 kHz.
+3) Transcribe con AWS Transcribe (idioma configurable).
+4) Llama a evaluate_and_persist(session_id, user_text, "", None)
+   -> GUARDA evaluation_rh con Da Vinci, KPIs, etc.
+5) Actualiza SOLO 'evaluation' (bloque público), 'duration_seconds',
+   'audio_path' (key del video) y 'timestamp'. NO pisa evaluation_rh.
+"""
 
-import os
-import re
-import json
-import logging
+from __future__ import annotations
+import os, json, time, secrets, logging, subprocess, requests
 from datetime import datetime
 from urllib.parse import urlparse
-from typing import Optional
 
-import psycopg2
-import boto3
+from dotenv import load_dotenv
 from celery import Celery
+import boto3
+from botocore.exceptions import ClientError
+import psycopg2
 
-# ─────────────────── CONFIG ───────────────────
-LOG_LEVEL = os.getenv("EVAL_LOG_LEVEL", "INFO").upper()
-logging.basicConfig(level=LOG_LEVEL, format="%(asctime)s [%(levelname)s] %(message)s")
-logger = logging.getLogger("leo_worker")
+from evaluator import evaluate_and_persist  # firma: (session_id, user_text, leo_text, video_path)
 
-DATABASE_URL = os.getenv("DATABASE_URL", "")
-if not DATABASE_URL:
-    raise RuntimeError("DATABASE_URL env var not set")
+# ────────────────── CONFIG GENERAL ──────────────────
+load_dotenv()
 
-# Broker/backend (Render ya te inyecta REDIS_URL)
-REDIS_URL = os.getenv("REDIS_URL", os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0"))
+CELERY_SOFT_LIMIT = int(os.getenv("CELERY_SOFT_LIMIT", 600))   # 10 min
+CELERY_HARD_LIMIT = int(os.getenv("CELERY_HARD_LIMIT", 660))   # 11 min
 
-# S3 (opcional, solo si quieres descargar el video)
-AWS_S3_BUCKET_NAME     = (os.getenv("AWS_S3_BUCKET_NAME", "").split("#", 1)[0]).strip().strip("'\"")
-AWS_S3_REGION_NAME     = os.getenv("AWS_S3_REGION_NAME", "us-east-1")
-AWS_ACCESS_KEY_ID      = os.getenv("AWS_ACCESS_KEY_ID")
-AWS_SECRET_ACCESS_KEY  = os.getenv("AWS_SECRET_ACCESS_KEY")
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+celery_app = Celery("leo_tasks", broker=REDIS_URL, backend=REDIS_URL)
+celery_app.conf.broker_transport_options = {"visibility_timeout": 7200}
+celery_app.conf.update(
+    task_track_started=True,
+    task_acks_late=True,
+    worker_prefetch_multiplier=1,
+    worker_hijack_root_logger=False,
+    worker_log_format="%(asctime)s %(levelname)s %(message)s",
+)
+celery_app.conf.imports = ("celery_worker",)
+
+logging.basicConfig(level=logging.INFO, force=True)
 
 TMP_DIR = os.getenv("TEMP_PROCESSING_FOLDER", "/tmp/leo_trainer_processing")
 os.makedirs(TMP_DIR, exist_ok=True)
 
-# ───────────────── Celery APP ─────────────────
-# ⚠️ Igual que el worker “que sí funciona”: forzamos a Celery a importar este módulo.
-celery_app = Celery(
-    "leo_tasks",
-    broker=REDIS_URL,
-    backend=os.getenv("CELERY_RESULT_BACKEND", REDIS_URL),
+AWS_S3_BUCKET_NAME     = os.getenv("AWS_S3_BUCKET_NAME", "").split("#", 1)[0].strip().strip("'\"")
+AWS_S3_REGION_NAME     = os.getenv("AWS_S3_REGION_NAME", "us-east-1")
+AWS_ACCESS_KEY_ID      = os.getenv("AWS_ACCESS_KEY_ID")
+AWS_SECRET_ACCESS_KEY  = os.getenv("AWS_SECRET_ACCESS_KEY")
+
+s3 = boto3.client(
+    "s3",
+    aws_access_key_id=AWS_ACCESS_KEY_ID,
+    aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
+    region_name=AWS_S3_REGION_NAME,
 )
-celery_app.conf.imports = ("celery_worker",)  # <- clave para que registre tareas de este módulo
-# (Opcional) deja todo en la cola por defecto “celery”
-celery_app.conf.task_default_queue = "celery"
+transcribe = boto3.client(
+    "transcribe",
+    aws_access_key_id=AWS_ACCESS_KEY_ID,
+    aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
+    region_name=AWS_S3_REGION_NAME,
+)
 
-# ──────────────── Evaluator import ────────────
-# Mantiene tu interfaz: evaluate_and_persist(session_id, user_text, avatar_text, video_path)
-from evaluator import evaluate_and_persist
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL env var not set")
 
-# ──────────────── DB helpers ──────────────────
+TRANSCRIBE_LANG = os.getenv("AWS_TRANSCRIBE_LANG", "es-MX")   # ajustable
+
+# ────────────────── HELPERS S3/FFMPEG/DB ──────────────────
+
+def dl_s3(bucket: str, key: str, dst: str) -> bool:
+    try:
+        s3.download_file(bucket, key, dst)
+        return True
+    except ClientError as e:
+        logging.error("[S3 DOWNLOAD] %s", e)
+        return False
+
+def up_s3(src: str, bucket: str, key: str) -> str | None:
+    try:
+        s3.upload_file(src, bucket, key)
+    except ClientError as e:
+        logging.error("[S3 UPLOAD] %s", e)
+        return None
+    return f"https://{bucket}.s3.{AWS_S3_REGION_NAME}.amazonaws.com/{key}"
+
+def run_ffmpeg_to_wav(src_webm: str, dst_wav: str) -> bool:
+    try:
+        subprocess.run(
+            ["ffmpeg", "-i", src_webm, "-vn", "-ar", "16000", "-ac", "1", "-y", dst_wav],
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, check=True
+        )
+        return True
+    except subprocess.CalledProcessError as e:
+        logging.error("[FFMPEG] %s", e.stderr.decode(errors="ignore"))
+        return False
+
 def db_conn():
     p = urlparse(DATABASE_URL)
     return psycopg2.connect(
-        database=p.path.lstrip("/"),
-        user=p.username,
-        password=p.password,
-        host=p.hostname,
-        port=p.port,
-        sslmode="require",
+        database=p.path.lstrip("/"), user=p.username, password=p.password,
+        host=p.hostname, port=p.port, sslmode="require",
     )
 
-def _update_db_only_public(session_id: int, public_text: str,
-                           duration_seconds: Optional[int],
-                           audio_key: Optional[str],
-                           ts_iso: Optional[str]):
-    """Actualiza SOLO 'evaluation' + metadatos. NO pisa evaluation_rh."""
-    try:
-        conn = db_conn()
-        cur  = conn.cursor()
-        cur.execute(
-            """
-            UPDATE interactions
-               SET evaluation = %s,
-                   duration_seconds = COALESCE(%s, duration_seconds),
-                   audio_path = COALESCE(%s, audio_path),
-                   timestamp = COALESCE(%s, timestamp)
-             WHERE id = %s;
-            """,
-            (public_text, duration_seconds, audio_key, ts_iso, session_id),
-        )
-        conn.commit()
-        conn.close()
-        logger.info("✓ Public eval actualizada (session_id=%s)", session_id)
-    except Exception as e:
-        logger.exception("No se pudo actualizar bloque público (session_id=%s): %s", session_id, e)
-
-def _get_transcript_from_db(session_id: int) -> str:
-    """
-    Usa avatar_transcript si existe; si no, intenta 'message' (puede ser JSON array).
-    Compacta espacios y recorta a 24k chars.
-    """
-    txt = ""
-    try:
-        conn = db_conn()
-        cur  = conn.cursor()
-        cur.execute("SELECT avatar_transcript FROM interactions WHERE id=%s;", (session_id,))
-        row = cur.fetchone()
-        if row and row[0]:
-            txt = str(row[0])
-
-        if not txt or len(txt.strip()) < 2:
-            cur.execute("SELECT message FROM interactions WHERE id=%s;", (session_id,))
-            row = cur.fetchone()
-            if row and row[0]:
-                raw = row[0]
-                try:
-                    data = json.loads(raw)
-                    if isinstance(data, list):
-                        txt = " ".join(map(str, data))
-                    elif isinstance(data, dict):
-                        txt = " ".join(map(str, data.values()))
-                    else:
-                        txt = str(data)
-                except Exception:
-                    txt = str(raw)
-        conn.close()
-    except Exception as e:
-        logger.exception("Error leyendo transcript de BD (session_id=%s): %s", session_id, e)
-
-    txt = re.sub(r"\s+", " ", txt or "").strip()
-    MAX_CHARS = 24000
-    if len(txt) > MAX_CHARS:
-        txt = txt[-MAX_CHARS:]
-    return txt
-
-# ──────────────── S3 helpers (opcional) ───────
-def _s3_client() -> Optional[boto3.client]:
-    if not (AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY and AWS_S3_BUCKET_NAME):
-        return None
-    return boto3.client(
-        "s3",
-        region_name=AWS_S3_REGION_NAME,
-        aws_access_key_id=AWS_ACCESS_KEY_ID,
-        aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
+def _update_db_only_public(sid: int, public_text: str, duration_seconds: int, video_key: str | None, timestamp_iso: str | None):
+    """NO toca evaluation_rh (ya la guardó evaluate_and_persist)."""
+    conn = db_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """UPDATE interactions SET
+               evaluation=%s,
+               duration_seconds=%s,
+               audio_path=%s,
+               timestamp=%s,
+               visible_to_user=FALSE
+           WHERE id=%s;""",
+        (public_text, duration_seconds, video_key, timestamp_iso, sid),
     )
+    conn.commit()
+    conn.close()
 
-def _maybe_download_from_s3(object_key: str) -> Optional[str]:
-    try:
-        s3 = _s3_client()
-        if not s3:
-            logger.info("S3 no configurado; omito descarga de %s", object_key)
-            return None
-        local_path = os.path.join(TMP_DIR, os.path.basename(object_key))
-        s3.download_file(AWS_S3_BUCKET_NAME, object_key, local_path)
-        logger.info("Descargado de S3: %s -> %s", object_key, local_path)
-        return local_path
-    except Exception as e:
-        logger.warning("No se pudo descargar de S3 (%s): %s", object_key, e)
-        return None
+def _safe_rm(*paths: str):
+    for p in paths:
+        try:
+            if p and os.path.exists(p):
+                os.remove(p)
+        except Exception:
+            pass
 
-# ──────────────── Lógica central ──────────────
-def _process_session_transcript_logic(payload: dict):
+# ────────────────── TASK ──────────────────
+
+@celery_app.task(
+    soft_time_limit=CELERY_SOFT_LIMIT,
+    time_limit=CELERY_HARD_LIMIT,
+    bind=True,
+    name="celery_worker.process_session_transcript",
+)
+def process_session_transcript(self, payload: dict):
     """
     payload:
-      - session_id (int)   [obligatorio]
-      - video_object_key   [opcional]
-      - timestamp_iso      [opcional]
-      - user_text          [opcional: si ya viene transcript consolidado]
+      - session_id (int)            obligatorio
+      - video_object_key (str)      obligatorio (clave S3 del .webm)
+      - duration (int)              opcional
     """
-    try:
-        sid = int(payload.get("session_id") or 0)
-    except Exception:
-        sid = 0
+    logging.info("🟢 START task=%s payload=%s", self.request.id, payload)
+
+    sid    = payload.get("session_id")
+    vkey   = payload.get("video_object_key")
+    dur    = int(payload.get("duration", 0))
+    ts_iso = datetime.utcnow().isoformat()
+
     if not sid:
-        logger.error("payload sin session_id: %r", payload)
+        logging.error("🚫 payload sin session_id")
         return
-
-    vkey: Optional[str] = payload.get("video_object_key")
-    ts_iso: Optional[str] = payload.get("timestamp_iso") or datetime.utcnow().isoformat()
-    user_txt = payload.get("user_text") or ""
-
-    # Si no hay video: caemos a transcript desde BD
     if not vkey:
-        logger.warning("🚫 session %s: falta video_object_key — uso transcript en BD", sid)
-        if not user_txt:
-            user_txt = _get_transcript_from_db(sid)
-        try:
-            res = evaluate_and_persist(sid, user_txt, "", None)
-            public_text = res.get("public", "Evaluación generada (sin video).")
-        except Exception as e:
-            logger.exception("[EVALUATE_PERSIST sin video] sid=%s error=%s", sid, e)
-            public_text = "⚠️ Evaluación automática no disponible."
-        _update_db_only_public(sid, public_text, duration_seconds=None, audio_key=None, ts_iso=ts_iso)
+        logging.warning("🚫 session %s: falta video_object_key", sid)
+        _update_db_only_public(sid, "⚠️ Falta video_object_key — no se procesó", dur, None, ts_iso)
         return
 
-    # Si hay video, descarga (opcional). Evaluamos igual por transcript (sin ASR aquí).
-    local_video: Optional[str] = _maybe_download_from_s3(vkey)
+    # 1) Descarga .webm
+    webm = os.path.join(TMP_DIR, os.path.basename(vkey))
+    if not dl_s3(AWS_S3_BUCKET_NAME, vkey, webm):
+        _update_db_only_public(sid, "⚠️ Video no encontrado en S3", dur, vkey, ts_iso)
+        return
 
-    if not user_txt:
-        user_txt = _get_transcript_from_db(sid)
+    # 2) Extrae WAV
+    wav = webm.rsplit(".", 1)[0] + ".wav"
+    if not run_ffmpeg_to_wav(webm, wav):
+        _update_db_only_public(sid, "⚠️ No se pudo extraer audio", dur, vkey, ts_iso)
+        _safe_rm(webm, wav)
+        return
 
+    # 3) Sube WAV y transcribe
+    audio_url = up_s3(wav, AWS_S3_BUCKET_NAME, f"audio/{os.path.basename(wav)}")
+    user_txt = ""
+    if audio_url:
+        try:
+            job = f"leo-{sid}-{secrets.token_hex(4)}"
+            transcribe.start_transcription_job(
+                TranscriptionJobName=job,
+                Media={"MediaFileUri": audio_url},
+                MediaFormat="wav",
+                LanguageCode=TRANSCRIBE_LANG,  # ej. es-MX / es-US / es-ES
+            )
+            # Polling simple
+            for _ in range(60):  # hasta ~8 min (60 * 8s)
+                status = transcribe.get_transcription_job(TranscriptionJobName=job)["TranscriptionJob"]
+                state = status["TranscriptionJobStatus"]
+                if state in {"COMPLETED", "FAILED"}:
+                    break
+                time.sleep(8)
+            if state == "COMPLETED":
+                uri = status["Transcript"]["TranscriptFileUri"]
+                user_txt = requests.get(uri, timeout=20).json()["results"]["transcripts"][0]["transcript"]
+            else:
+                logging.error("Transcribe FAILED para sid=%s", sid)
+        except Exception as e:
+            logging.exception("[TRANSCRIBE] sid=%s error=%s", sid, e)
+
+    # Clip de seguridad por tokens
+    MAX_CHARS = 24_000
+    user_txt = (user_txt or "")[-MAX_CHARS:]
+
+    # 4) Evalúa y PERSISTE (evaluation_rh) vía evaluator
     try:
-        res = evaluate_and_persist(sid, user_txt, "", local_video)
+        res = evaluate_and_persist(sid, user_txt, "", None)
         public_text = res.get("public", "Evaluación generada.")
+        internal_preview = res.get("internal", {}) or {}
+        dv_total = (internal_preview.get("da_vinci_points") or {}).get("total")
+        logging.info("[EVAL OK] sid=%s dv_total=%s kpi_avg=%s",
+                     sid, dv_total, (internal_preview.get("kpis") or {}).get("avg_score"))
     except Exception as e:
-        logger.exception("[EVALUATE_PERSIST con video] sid=%s error=%s", sid, e)
+        logging.exception("[EVALUATE_PERSIST] sid=%s error=%s", sid, e)
         public_text = "⚠️ Evaluación automática no disponible."
 
-    _update_db_only_public(sid, public_text, duration_seconds=None, audio_key=vkey, ts_iso=ts_iso)
+    # 5) Actualiza SOLO campos públicos/operativos
+    _update_db_only_public(sid, public_text, dur, vkey, ts_iso)
 
-    # Limpieza
-    try:
-        if local_video and os.path.exists(local_video):
-            os.remove(local_video)
-    except Exception:
-        pass
+    # 6) Limpieza
+    _safe_rm(webm, wav)
+    logging.info("✅ DONE task=%s sid=%s", self.request.id, sid)
 
-# ──────────────── REGISTRO DE TAREAS ──────────
-# 1) Nombre totalmente calificado (como tu ejemplo que sí funciona)
-@celery_app.task(name="celery_worker.process_session_transcript", bind=True)
-def task_fqdn(self, payload: dict):
-    return _process_session_transcript_logic(payload)
+# ────────────────── INIT DB (defensivo) ──────────────────
 
-# 2) Alias no calificado (como el que vi en tu log de error)
-@celery_app.task(name="process_session_transcript", bind=True)
-def task_alias(self, payload: dict):
-    return _process_session_transcript_logic(payload)
+def init_db():
+    conn = db_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS interactions (
+            id SERIAL PRIMARY KEY,
+            name TEXT,
+            email TEXT,
+            scenario TEXT,
+            message TEXT,
+            response TEXT,
+            audio_path TEXT,
+            timestamp TEXT,
+            evaluation TEXT,
+            evaluation_rh TEXT,
+            duration_seconds INTEGER DEFAULT 0,
+            tip TEXT,
+            visual_feedback TEXT,
+            visible_to_user BOOLEAN DEFAULT FALSE,
+            avatar_transcript TEXT,
+            rh_comment TEXT
+        );"""
+    )
+    conn.commit()
+    conn.close()
 
-# ──────────────── CLI manual ──────────────────
-if __name__ == "__main__":
-    import argparse
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--session_id", type=int, required=True)
-    ap.add_argument("--video_object_key", type=str, default="")
-    ap.add_argument("--user_text", type=str, default="")
-    args = ap.parse_args()
-    payload = {
-        "session_id": args.session_id,
-        "video_object_key": args.video_object_key or None,
-        "user_text": args.user_text or None,
-        "timestamp_iso": datetime.utcnow().isoformat()
-    }
-    _process_session_transcript_logic(payload)
+init_db()
