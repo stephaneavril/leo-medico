@@ -10,9 +10,10 @@ import {
   VoiceChatTransport,
   VoiceEmotion,
   StartAvatarRequest,
-  STTProvider,
+  // STTProvider,      // ← quitado para usar el STT por defecto de HeyGen
   ElevenLabsModel,
 } from '@heygen/streaming-avatar';
+
 import {
   StreamingAvatarProvider,
   StreamingAvatarSessionState,
@@ -20,6 +21,7 @@ import {
   useVoiceChat,
   MessageSender,
 } from '@/components/logic';
+
 import { Button } from '@/components/Button';
 import { AvatarConfig } from '@/components/AvatarConfig';
 import { AvatarVideo } from '@/components/AvatarSession/AvatarVideo';
@@ -37,13 +39,17 @@ const DEFAULT_CONFIG: StartAvatarRequest = {
   knowledgeId: '13f254b102cf436d8c07b9fb617dbadf',
   language: 'es',
   voice: {
+    // Usa la voz que prefieras; ésta es la que pegaste
     voiceId: '1edf8ae6571d46c8b7e719eaa91f93c6',
     model: ElevenLabsModel.eleven_multilingual_v2,
     rate: 1.15,
     emotion: VoiceEmotion.FRIENDLY,
   },
-  voiceChatTransport: VoiceChatTransport.WEBSOCKET,
-  sttSettings: { provider: STTProvider.DEEPGRAM },
+  // Cambiamos a WEBRTC para evitar firewalls que bloquean WebSocket (subida de micrófono)
+  voiceChatTransport: VoiceChatTransport.WEBRTC,
+
+  // Deja el STT por defecto (comenta/borra si antes forzabas Deepgram):
+  // sttSettings: { provider: STTProvider.DEEPGRAM },
 };
 
 function InteractiveSessionContent() {
@@ -60,6 +66,7 @@ function InteractiveSessionContent() {
     handleUserTalkingMessage,
     handleStreamingTalkingMessage,
   } = useStreamingAvatarSession();
+
   const { startVoiceChat } = useVoiceChat();
 
   // ── Local UI State ────────────────────────────────────────────
@@ -234,15 +241,41 @@ function InteractiveSessionContent() {
         const heygenToken = await fetchAccessToken();
         const avatar = initAvatar(heygenToken);
 
+        // Logs útiles
+        avatar.on(StreamingEvents.USER_TALKING_MESSAGE, (e) => {
+          console.log('USER_STT:', e.detail);
+          handleUserTalkingMessage({ detail: e.detail });
+        });
+        avatar.on(StreamingEvents.AVATAR_TALKING_MESSAGE, (e) => {
+          console.log('AVATAR_TTS:', e.detail);
+          handleStreamingTalkingMessage({ detail: e.detail });
+        });
+
         avatar.on(StreamingEvents.STREAM_DISCONNECTED, () => {
           if (!isFinalizingRef.current) stopAndFinalizeSession(messagesRef.current);
         });
-        avatar.on(StreamingEvents.STREAM_READY, () => setIsAttemptingAutoStart(false));
-        avatar.on(StreamingEvents.USER_TALKING_MESSAGE, (e) => handleUserTalkingMessage({ detail: e.detail }));
-        avatar.on(StreamingEvents.AVATAR_TALKING_MESSAGE, (e) => handleStreamingTalkingMessage({ detail: e.detail }));
 
-        await startAvatar(config);
-        if (withVoice) await startVoiceChat();
+        // Cuando el stream está listo, levantamos la VOZ (STT)
+        avatar.on(StreamingEvents.STREAM_READY, async () => {
+          setIsAttemptingAutoStart(false);
+
+          // TTS de confirmación (opcional)
+          try {
+            await (avatar as any)?.speakText?.('Hola, ya te escucho. Cuando quieras, empezamos.');
+          } catch {}
+
+          if (withVoice) {
+            try {
+              await startVoiceChat(); // ← aquí enciende STT + gestión de turnos
+              console.log('startVoiceChat OK');
+            } catch (e) {
+              console.error('startVoiceChat falló:', e);
+            }
+          }
+        });
+
+        await startAvatar(config); // levantamos el stream del avatar
+        // NOTA: ya no llamamos startVoiceChat aquí; ahora va en STREAM_READY
       } catch (err: any) {
         console.error('Error iniciando sesión con HeyGen:', err);
         setShowAutoplayBlockedMessage(true);
@@ -250,7 +283,17 @@ function InteractiveSessionContent() {
         setIsAttemptingAutoStart(false);
       }
     },
-    [hasUserMediaPermission, fetchAccessToken, initAvatar, config, startAvatar, startVoiceChat, stopAndFinalizeSession, handleUserTalkingMessage, handleStreamingTalkingMessage]
+    [
+      hasUserMediaPermission,
+      fetchAccessToken,
+      initAvatar,
+      config,
+      startAvatar,
+      startVoiceChat,
+      stopAndFinalizeSession,
+      handleUserTalkingMessage,
+      handleStreamingTalkingMessage,
+    ]
   );
 
   // ── Get user media on mount ─────────────────────────────────
