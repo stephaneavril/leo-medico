@@ -101,7 +101,6 @@ WEIGHTED_KWS = {
     ],
 }
 
-# Ampliado con frases que aparecen en demos
 DAVINCI_POINTS = {
     "preparacion": {
         2: ["objetivo smart", "mi objetivo hoy es", "metas smart"],
@@ -150,7 +149,6 @@ LISTEN_KW  = [
     "que le preocupa", "me gustaria conocer", "que caracteristicas tienen", "podria contarme", "como describe a sus pacientes"
 ]
 
-# Rúbrica de producto
 PRODUCT_RUBRIC: Dict[str, Dict[str, List[str] | int]] = {
     "mecanismo": {
         "weight": 2,
@@ -304,6 +302,79 @@ def get_db_connection():
         host=parsed.hostname, port=parsed.port, sslmode="require",
     )
 
+# ─────────── Helpers de “compact” ───────────
+
+def _risk_from_score(score_14: int) -> str:
+    if score_14 <= 4:
+        return "ALTO"
+    if score_14 <= 9:
+        return "MEDIO"
+    return "BAJO"
+
+def _build_compact(user_text: str, internal: dict) -> dict:
+    """Arma el bloque compacto que pide el admin."""
+    # 0–8 (conocimiento legacy) + 0–6 (fases promedio) = 14
+    legacy_8 = internal.get("knowledge_score_legacy_num") or 0
+    avg_phase_1_3 = (internal.get("kpis") or {}).get("avg_phase_score_1_3", 1.0)
+    phase_0_6 = max(0, min(6, round((avg_phase_1_3 - 1) * (6 / 2))))
+    score_14 = int(max(0, min(14, legacy_8 + phase_0_6)))
+
+    iq = internal.get("interaction_quality", {}) or {}
+    davinci = internal.get("da_vinci_points", {}) or {}
+
+    strengths = []
+    if (internal.get("product_claims") or {}).get("product_score_total", 0) >= 3:
+        strengths.append("Conoce beneficios y mecanismo del producto")
+    if iq.get("active_listening_level") in ("Alta", "Moderada"):
+        strengths.append(f"Escucha activa {iq.get('active_listening_level').lower()}")
+    if iq.get("closing_present"):
+        strengths.append("Incluyó cierre con siguiente paso")
+
+    opportunities = []
+    if legacy_8 < 5:
+        opportunities.append("Refuerza mensajes clave y evidencia clínica")
+    if not iq.get("closing_present"):
+        opportunities.append("Cierra la visita con un acuerdo concreto")
+    if (davinci.get("apertura", 0) + davinci.get("persuasion", 0)) < 3:
+        opportunities.append("Profundiza en apertura/persuasión con preguntas y beneficios")
+
+    coaching_3 = []
+    if opportunities:
+        coaching_3.append("Prepara 1 objetivo SMART para la próxima visita")
+    coaching_3.append("Usa 2–3 frases clínicas con respaldo de estudio")
+    coaching_3.append("Formula 3 preguntas para explorar necesidades del médico")
+
+    frase_guia = "Propón: 'Con base en lo conversado, ¿le parece iniciar ESOXX-ONE en un paciente candidato y revisamos en 2 semanas?'"
+    kpis = [
+        f"Score 0–14: {score_14}",
+        f"Escucha activa: {iq.get('active_listening_level','N/D')}",
+        f"Fases Da Vinci: {davinci.get('total',0)} señales",
+    ]
+
+    # Textos listos para “copiar” en admin
+    rh_text = (
+        f"Sesión: score {score_14}/14; riesgo { _risk_from_score(score_14) }. "
+        f"Fortalezas: {', '.join(strengths) or '—'}. "
+        f"Oportunidades: {', '.join(opportunities) or '—'}. "
+        f"Coaching: {', '.join(coaching_3)}."
+    )
+    user_text_summary = (
+        "Buen avance. Refuerza evidencia y acuerda un siguiente paso concreto. "
+        "Prepara 3 preguntas de apertura para conocer mejor a tus pacientes."
+    )
+
+    return {
+        "score_14": score_14,
+        "risk": _risk_from_score(score_14),
+        "strengths": strengths,
+        "opportunities": opportunities,
+        "coaching_3": coaching_3,
+        "frase_guia": frase_guia,
+        "kpis": kpis,
+        "rh_text": rh_text,
+        "user_text": user_text_summary,
+    }
+
 # ─────────── Evaluador principal ───────────
 
 def _validate_internal(internal: dict, user_text: str) -> dict:
@@ -321,6 +392,9 @@ def _validate_internal(internal: dict, user_text: str) -> dict:
             "avg_steps_pct": 0.0,
             "legacy_count": kw_score(user_text),
         }
+    # Si no hay compacto, créalo mínimo
+    if "compact" not in internal:
+        internal["compact"] = _build_compact(user_text, internal)
     return internal
 
 def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str] = None) -> Dict[str, object]:
@@ -429,36 +503,6 @@ def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str
     avg_phase_score_1_3 = round(sum(md_scores) / 5.0, 2)
     avg_score_0_10      = round((avg_phase_score_1_3 - 1) * (10 / 2), 1)
 
-    # ── Compact card (para admin) ───────────────────────────────
-    # Score 0–14 mapeando el promedio 1–3 → 0–14
-    score_14 = max(0, min(14, int(round((avg_phase_score_1_3 - 1) / 2 * 14))))
-    risk = "BAJO" if avg_score_0_10 >= 7 else "MEDIO" if avg_score_0_10 >= 4 else "ALTO"
-
-    strengths = []
-    if iq["active_listening_level"] != "Baja": strengths.append("Escucha activa")
-    if davinci_pts.get("apertura", 0) >= 2: strengths.append("Explora necesidades")
-    if prod_total >= 3: strengths.append("Mensajes clínicos presentes")
-
-    opportunities = []
-    if davinci_pts.get("cierre", 0) < 2: opportunities.append("Cerrar con siguiente paso")
-    if davinci_pts.get("persuasion", 0) < 2: opportunities.append("Usar evidencia y posología")
-    if iq["question_rate"] < 2.0: opportunities.append("Aumentar preguntas abiertas")
-
-    coaching_3 = [
-        "Decir posología completa y tiempos de espera.",
-        "Sustituir adjetivos por lenguaje clínico moderado.",
-        "Terminar con un siguiente paso acordado."
-    ]
-
-    frase_guia = ("“En pacientes con síntomas persistentes pese a IBP, ESOXX ONE complementa la terapia: "
-                  "1 stick post-comida y 1 antes de dormir para que la barrera bioadhesiva actúe.”")
-
-    kpis_list = [
-        f"Aplicación de pasos Da Vinci: {steps_applied_count}/5 ({steps_applied_pct}%)",
-        f"Escucha activa: {iq['active_listening_level']}",
-        f"Puntos producto (rubrica): {prod_total}",
-    ]
-
     internal_summary = {
         "overall_training_summary": gpt_internal.get("overall_evaluation", ""),
         "knowledge_score_legacy": f"{legacy_8}/8",
@@ -470,7 +514,7 @@ def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str
         "visual_percentage": vis_pct,
 
         "da_vinci_step_flags": {
-            **{k: ("✅" if v else "❌") for k, v in sales_model_flags.items()},
+            **{k: ("✅" if v else "❌") for k, v in sales_model_flags.items() },
             "steps_applied_count": f"{steps_applied_count}/5",
             "steps_applied_pct": steps_applied_pct,
         },
@@ -492,33 +536,14 @@ def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str
             "avg_phase_score_1_3": avg_phase_score_1_3,
             "avg_steps_pct": steps_applied_pct,
             "legacy_count": legacy_8,
-        },
-
-        # NUEVO bloque compacto para admin
-        "compact": {
-            "score_14": score_14,
-            "risk": risk,
-            "strengths": strengths,
-            "opportunities": opportunities,
-            "coaching_3": coaching_3,
-            "frase_guia": frase_guia,
-            "kpis": kpis_list,
-            "rh_text": (
-                f"Sesión: Score {score_14}/14 · Riesgo: {risk}. "
-                f"Fortalezas: {', '.join(strengths) or '—'}. "
-                f"Oportunidades: {', '.join(opportunities) or '—'}. "
-                f"Coaching inmediato: {', '.join(coaching_3)}. "
-                f"Frase guía: {frase_guia}"
-            ),
-            "user_text": (
-                "Buen avance. Refuerza evidencia y posología de ESOXX ONE y cierra con un siguiente paso claro. "
-                "Mantén preguntas abiertas y escucha activa."
-            ),
         }
     }
 
+    # 👉 Compacto para el admin (antes no existía)
+    internal_summary["compact"] = _build_compact(user_text, internal_summary)
+
     # Público (diplomático)
-    extra_line = "• Refuerza preguntas y estructura." if low_dialogue_note else "• Mantén la estructura y refuerza evidencias."
+    extra_line = "• Refuerza preguntas y estructura." if (len(normalize(user_text).split()) < 25) else "• Mantén la estructura y refuerza evidencias."
     public_block = textwrap.dedent(f"""
         {gpt_public}
 
