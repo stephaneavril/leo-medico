@@ -805,50 +805,62 @@ def validate_user_endpoint():
     finally:
         if conn:
             conn.close()
+
 # --- RE-EVALUAR UNA SESIÓN Y GENERAR internal.compact -----------------
-from flask import redirect, url_for, flash, request
-import psycopg2, json
-from evaluator import evaluate_and_persist
+from flask import redirect, request
+import os, json, psycopg2
 from urllib.parse import urlparse
-import os
+from evaluator import evaluate_and_persist
 
 def _db_conn():
     dsn = os.getenv("DATABASE_URL")
     p = urlparse(dsn)
     return psycopg2.connect(
-        database=p.path[1:], user=p.username, password=p.password,
-        host=p.hostname, port=p.port, sslmode="require",
+        database=p.path[1:],
+        user=p.username,
+        password=p.password,
+        host=p.hostname,
+        port=p.port,
+        sslmode="require",
     )
 
-@app.post("/admin/recompute/<int:session_id>")
+# Acepta GET y POST para evitar 405 / “Internal Server Error” si alguien abre el link directo
+@app.route("/admin/recompute/<int:session_id>", methods=["GET", "POST"])
 def admin_recompute(session_id: int):
-    # 1) saco user/leo transcript de la sesión
-    conn = _db_conn()
     user_t, leo_t = "", ""
+
+    # 1) obtener textos de la sesión
     try:
+        conn = _db_conn()
         with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT user_transcript, avatar_transcript
                 FROM interactions
                 WHERE id = %s
-            """, (session_id,))
+                """,
+                (session_id,),
+            )
             row = cur.fetchone()
-            if not row:
-                flash("Sesión no encontrada", "error")
-                return redirect(url_for("admin"))
-            user_t, leo_t = row[0] or "", row[1] or ""
-    finally:
         conn.close()
+        if not row:
+            print(f"[recompute] sesión {session_id} no encontrada")
+            return redirect("/admin")
+        user_t, leo_t = row[0] or "", row[1] or ""
+    except Exception as e:
+        print(f"[recompute] error leyendo BD: {e}")
+        return redirect("/admin")
 
-    # 2) re-evalúa y persiste (esto genera internal.compact)
+    # 2) re-evaluar y persistir (genera/actualiza internal.compact)
     try:
         evaluate_and_persist(session_id, user_t, leo_t, video_path=None)
-        flash(f"Sesión {session_id} re-evaluada correctamente.", "success")
+        print(f"[recompute] sesión {session_id} evaluada OK")
     except Exception as e:
-        flash(f"Fallo al re-evaluar: {e}", "error")
+        # No interrumpimos el flujo; volvemos al panel
+        print(f"[recompute] error evaluando sesión {session_id}: {e}")
 
-    # 3) de vuelta al panel
-    return redirect(url_for("admin"))
+    # 3) volver al panel
+    return redirect("/admin")
 
 # ─────────────────────────────────────────────────────────
 #  DASHBOARD DATA  –  Devuelve las sesiones del usuario
