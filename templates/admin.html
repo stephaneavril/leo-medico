@@ -36,6 +36,11 @@
     .container { max-width: 1200px; margin: 0 auto; padding: 40px 32px; }
     .section-title { font: 600 24px 'Montserrat', sans-serif; margin: 40px 0 24px; border-bottom: 2px solid var(--primary-light); padding-bottom: 10px; }
 
+    .flash-wrap { margin: 16px 0 0; }
+    .flash { padding: 10px 14px; border-radius: 8px; margin-bottom: 8px; font-weight: 600; }
+    .flash.success { background:#e6fffa; color:#03543f; border-left:4px solid #0e9f6e; }
+    .flash.error   { background:#fff5f5; color:#9b1c1c; border-left:4px solid #c81e1e; }
+
     .session-entry { background: var(--bg-white); color: var(--text-dark); border-radius: 16px; box-shadow: 0 8px 24px var(--shadow-lg); padding: 24px; margin-bottom: 40px; display: grid; grid-template-columns: 1fr; gap: 24px; }
     @media (min-width: 1024px) { .session-entry { grid-template-columns: 1fr 380px; } }
     .session-entry h3 { font: 600 20px 'Montserrat', sans-serif; color: var(--primary-dark); margin-bottom: 12px; border-bottom: 1px solid #eee; padding-bottom: 8px; }
@@ -69,6 +74,9 @@
     button { padding: 10px 18px; border: none; border-radius: 6px; background: var(--primary-light); color: #000; font-weight: 600; font-size: 15px; cursor: pointer; transition: background 0.2s ease, transform 0.1s ease; white-space: nowrap; }
     button:hover { background: #009acd; transform: translateY(-1px); }
     button:active { transform: translateY(0); }
+    .btn-ghost { background:#6c757d; color:#fff; }
+    .btn-ghost:hover { background:#5a6268; }
+
     .user-management-actions button[name='toggle'] { background: #ffc107; color: var(--text-dark); }
     .user-management-actions button[name='toggle']:hover { background: #e0a800; }
     .user-management-actions button[name='regen_token'] { background: #6c757d; }
@@ -85,6 +93,17 @@
   </header>
 
   <div class="container">
+    <!-- Mensajes flash -->
+    {% with msgs = get_flashed_messages(with_categories=true) %}
+    {% if msgs %}
+      <div class="flash-wrap">
+        {% for cat, m in msgs %}
+          <div class="flash {{cat}}">{{ m }}</div>
+        {% endfor %}
+      </div>
+    {% endif %}
+    {% endwith %}
+
     <h2 class="section-title">Resultados de Sesiones Individuales</h2>
 
     {% for row in data %}
@@ -120,7 +139,7 @@
           <strong>Resumen para usuario:</strong><br />{{ row[8] }}
         </div>
 
-        {# ====== NUEVO: Card compacta o aviso mínimo ====== #}
+        {# ====== Card compacta o aviso mínimo ====== #}
         {% set internal = row[9] %}
         {% set compact = internal.compact if internal and internal.compact is defined else None %}
         {% set summary = internal.overall_training_summary or internal.overall_rh_summary %}
@@ -175,6 +194,11 @@
             </p>
           </div>
         {% endif %}
+
+        <!-- Botón para recomputar análisis -->
+        <form action="/admin/recompute/{{ row[0] }}" method="POST" style="margin-top: 10px">
+          <button type="submit" class="btn-ghost">🔁 Recalcular análisis</button>
+        </form>
       </div>
 
       <!-- Columna B -->
