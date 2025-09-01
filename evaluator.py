@@ -1,10 +1,12 @@
-# evaluator.py
+# evaluator.py — versión dinámica (drop-in)
 # -------------------------------------------------------------------
-# Analiza una simulación Representante ↔ Médico (texto + video opc.)
+# Analiza una simulación Representante (usuario) ↔ Médico (LEO, avatar)
 # Guarda SIEMPRE métricas en BD cuando se llama vía evaluate_and_persist().
 # Retorna: {"public": str, "internal": dict, "level": "alto"|"error"}
 # -------------------------------------------------------------------
-import os, json, textwrap, unicodedata, re, difflib
+
+from __future__ import annotations
+import os, json, textwrap, unicodedata, re, difflib, random
 from typing import Optional, Dict, List, Tuple
 from urllib.parse import urlparse
 
@@ -15,11 +17,17 @@ except ImportError:
     cv2 = None
 
 import psycopg2
-from openai import OpenAI
 from dotenv import load_dotenv
 
+# OpenAI opcional (resumen semántico)
+try:
+    from openai import OpenAI
+except Exception:
+    OpenAI = None
+
 load_dotenv()
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY", ""))
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+_openai = OpenAI(api_key=OPENAI_API_KEY) if (OPENAI_API_KEY and OpenAI) else None
 
 # ───────────────────────── Utils ─────────────────────────
 
@@ -37,7 +45,7 @@ def canonicalize_products(nt: str) -> str:
     variants = [
         r"\beso\s*xx\s*one\b", r"\besox+\s*one\b", r"\besoxx-one\b",
         r"\besof+\s*one\b", r"\becox+\s*one\b", r"\besox+\b", r"\besof+\b",
-        r"\becox+\b", r"\beso\s*xx\b", r"\besoft\s*one\b", r"\besoxxone\b",
+        r"\becox+\b", r"\beso\s*xx\b", r"\besoxxone\b", r"\besoft\s*one\b",
         r"\bays?oks?\b", r"\bays?oks?\s*one\b", r"\besok+\b",
     ]
     canon = nt
@@ -77,18 +85,14 @@ WEIGHTED_KWS = {
     ],
     "2pt": [
         "protege y repara mucosa esofagica",
-        "protege y promueve la reparacion de la mucosa esofagica",
         "barrera bioadhesiva",
         "combinacion de 3 activos",
-        "acido hialuronico",
-        "sulfato de condroitina",
-        "poloxamero 407",
+        "acido hialuronico", "sulfato de condroitina", "poloxamero 407",
         "recubre el epitelio esofagico",
         "liquido a temperatura ambiente y en estado gel a temperatura corporal",
         "un sobre despues de cada comida y antes de dormir",
         "esperar por lo menos 30min despues sin tomar alimentos o bebidas",
-        "esperar 60min",
-        "esperar 1hr",
+        "esperar 60min", "esperar 1hr",
     ],
     "1pt": [
         "mecanismo de proteccion original e innovador para el manejo de la erge",
@@ -104,36 +108,17 @@ WEIGHTED_KWS = {
 DAVINCI_POINTS = {
     "preparacion": {
         2: ["objetivo smart", "mi objetivo hoy es", "metas smart"],
-        1: [
-            "objetivo de la visita", "propósito de la visita", "mensaje clave",
-            "hoy quiero", "plan para hoy", "materiales", "presentacion preparada"
-        ],
+        1: ["objetivo de la visita", "proposito de la visita", "mensaje clave", "hoy quiero", "plan para hoy", "materiales"],
     },
     "apertura": {
-        2: [
-            "cuales son las mayores preocupaciones", "principal preocupacion",
-            "que caracteristicas tienen sus pacientes", "visita anterior",
-            "me gustaria conocer", "que es lo que mas le preocupa"
-        ],
-        1: [
-            "buenos dias", "buen dia", "hola doctora", "mi nombre es",
-            "como ha estado", "gracias por su tiempo"
-        ],
+        2: ["cuales son las mayores preocupaciones", "principal preocupacion", "que caracteristicas tienen sus pacientes", "visita anterior", "me gustaria conocer", "que es lo que mas le preocupa"],
+        1: ["buenos dias", "buen dia", "hola doctora", "mi nombre es", "como ha estado", "gracias por su tiempo"],
     },
     "persuasion": {
-        2: [
-            "que caracteristicas considera ideales", "objetivos de tratamiento",
-            "combinado con ibp", "sinergia con inhibidores de la bomba de protones",
-            "mecanismo", "beneficio", "evidencia", "estudio",
-            "tres componentes", "acido hialuronico", "condroitin", "poloxamero",
-        ]
+        2: ["que caracteristicas considera ideales", "objetivos de tratamiento", "combinado con ibp", "sinergia con inhibidores de la bomba de protones", "mecanismo", "beneficio", "evidencia", "estudio", "tres componentes", "acido hialuronico", "condroitin", "poloxamero"],
     },
     "cierre": {
-        2: [
-            "con base a lo dialogado considera que esoxx-one", "podria empezar con algun paciente",
-            "le parece si iniciamos", "empezar a considerar algun paciente",
-            "podemos acordar un siguiente paso", "puedo contar con su apoyo",
-        ],
+        2: ["con base a lo dialogado considera que esoxx-one", "podria empezar con algun paciente", "le parece si iniciamos", "empezar a considerar algun paciente", "podemos acordar un siguiente paso", "puedo contar con su apoyo"],
         1: ["siguiente paso", "podemos acordar", "puedo contar con", "le parece si"],
     },
     "analisis_post": {
@@ -143,7 +128,7 @@ DAVINCI_POINTS = {
 }
 
 KW_LIST = ["beneficio", "estudio", "sintoma", "tratamiento", "reflujo", "mecanismo", "eficacia", "seguridad"]
-BAD_PHRASES = ["no se", "no tengo idea", "lo invento", "no lo estudie", "no estudie bien", "no conozco", "no me acuerdo"]
+BAD_PHRASES = ["no se", "no tengo idea", "lo invente", "no lo estudie", "no estudie bien", "no conozco", "no me acuerdo"]
 LISTEN_KW  = [
     "entiendo", "comprendo", "veo que", "lo que dices", "si entiendo bien", "parafraseando",
     "que le preocupa", "me gustaria conocer", "que caracteristicas tienen", "podria contarme", "como describe a sus pacientes"
@@ -302,7 +287,7 @@ def get_db_connection():
         host=parsed.hostname, port=parsed.port, sslmode="require",
     )
 
-# ─────────── Helpers de “compact” ───────────
+# ─────────── Helpers dinámicos ───────────
 
 def _risk_from_score(score_14: int) -> str:
     if score_14 <= 4:
@@ -311,61 +296,95 @@ def _risk_from_score(score_14: int) -> str:
         return "MEDIO"
     return "BAJO"
 
+def _top_hits(detail: Dict[str, dict], k: int = 2) -> List[str]:
+    scored = [(cat, d.get("score", 0), d.get("hits", [])) for cat, d in detail.items()]
+    scored = [x for x in scored if x[1] > 0]
+    scored.sort(key=lambda x: x[1], reverse=True)
+    out = []
+    for cat, _, hits in scored[:k]:
+        if hits:
+            out.append(f"{cat.replace('_',' ')}: " + ", ".join(hits[:2]))
+    return out
+
+def _phrase_guide(iq: dict, prod_total: int, closing_present: bool) -> str:
+    pool = [
+        "Propón: 'Con base en lo conversado, ¿le parece iniciar ESOXX-ONE en 1 paciente candidato y revisamos en 2 semanas?'",
+        "Cierra así: 'Acordemos un siguiente paso: pruebe ESOXX-ONE con un caso y validamos en la próxima visita.'",
+        "Sugerencia: 'Si ve utilidad, empecemos con un paciente nocturno/refractario y damos seguimiento.'",
+        "Alternativa: '¿Le parece dejar 3 muestras y programar retroalimentación en 14 días?'",
+    ]
+    if closing_present:
+        return "Refuerza el seguimiento: fija fecha específica y solicita retro clínica (síntomas + adherencia)."
+    if prod_total == 0:
+        return "Cierra con acuerdo explícito (paciente candidato + fecha de seguimiento)."
+    return random.choice(pool)
+
 def _build_compact(user_text: str, internal: dict) -> dict:
-    """Arma el bloque compacto que pide el admin."""
-    # 0–8 (conocimiento legacy) + 0–6 (fases promedio) = 14
+    """Arma el bloque dinámico para el admin."""
     legacy_8 = internal.get("knowledge_score_legacy_num") or 0
+    davinci = internal.get("da_vinci_points", {}) or {}
+    iq = internal.get("interaction_quality", {}) or {}
+    prod = (internal.get("product_claims") or {}).get("detail", {})
+    prod_total = (internal.get("product_claims") or {}).get("product_score_total", 0)
+
     avg_phase_1_3 = (internal.get("kpis") or {}).get("avg_phase_score_1_3", 1.0)
     phase_0_6 = max(0, min(6, round((avg_phase_1_3 - 1) * (6 / 2))))
     score_14 = int(max(0, min(14, legacy_8 + phase_0_6)))
-
-    iq = internal.get("interaction_quality", {}) or {}
-    davinci = internal.get("da_vinci_points", {}) or {}
+    risk = _risk_from_score(score_14)
 
     strengths = []
-    if (internal.get("product_claims") or {}).get("product_score_total", 0) >= 3:
-        strengths.append("Conoce beneficios y mecanismo del producto")
+    if prod_total >= 2:
+        strengths.append("Mecanismo/beneficios explicados con señales de producto")
     if iq.get("active_listening_level") in ("Alta", "Moderada"):
-        strengths.append(f"Escucha activa {iq.get('active_listening_level').lower()}")
+        strengths.append(f"Escucha activa {iq['active_listening_level'].lower()}")
+    if davinci.get("persuasion", 0) >= 2:
+        strengths.append("Persuasión con enfoque clínico")
     if iq.get("closing_present"):
-        strengths.append("Incluyó cierre con siguiente paso")
+        strengths.append("Cierre con siguiente paso")
+    strengths += _top_hits(prod, 1)
 
     opportunities = []
     if legacy_8 < 5:
         opportunities.append("Refuerza mensajes clave y evidencia clínica")
     if not iq.get("closing_present"):
-        opportunities.append("Cierra la visita con un acuerdo concreto")
+        opportunities.append("Asegura un cierre con acuerdo concreto")
     if (davinci.get("apertura", 0) + davinci.get("persuasion", 0)) < 3:
-        opportunities.append("Profundiza en apertura/persuasión con preguntas y beneficios")
+        opportunities.append("Mayor exploración clínica y beneficio para el caso del médico")
+    if davinci.get("preparacion", 0) < 2:
+        opportunities.append("Define un objetivo SMART antes de la visita")
 
     coaching_3 = []
-    if opportunities:
-        coaching_3.append("Prepara 1 objetivo SMART para la próxima visita")
-    coaching_3.append("Usa 2–3 frases clínicas con respaldo de estudio")
-    coaching_3.append("Formula 3 preguntas para explorar necesidades del médico")
+    if "Asegura un cierre con acuerdo concreto" in opportunities and not iq.get("closing_present"):
+        coaching_3.append("Ensaya 2 cierres distintos y elige uno según la conversación")
+    if legacy_8 < 5:
+        coaching_3.append("Integra 2–3 frases clínicas con respaldo de estudio")
+    if (davinci.get("apertura", 0) < 2):
+        coaching_3.append("Prepara 3 preguntas de apertura para perfilar al paciente")
+    if not coaching_3:
+        coaching_3 = ["Mantén objetivo SMART", "Sostén 2 frases clínicas", "Cierra con acuerdo fechado"]
 
-    frase_guia = "Propón: 'Con base en lo conversado, ¿le parece iniciar ESOXX-ONE en un paciente candidato y revisamos en 2 semanas?'"
+    frase_guia = _phrase_guide(iq, prod_total, iq.get("closing_present", False))
+
     kpis = [
         f"Score 0–14: {score_14}",
         f"Escucha activa: {iq.get('active_listening_level','N/D')}",
         f"Fases Da Vinci: {davinci.get('total',0)} señales",
     ]
 
-    # Textos listos para “copiar” en admin
     rh_text = (
-        f"Sesión: score {score_14}/14; riesgo { _risk_from_score(score_14) }. "
+        f"Sesión: score {score_14}/14; riesgo {risk}. "
         f"Fortalezas: {', '.join(strengths) or '—'}. "
         f"Oportunidades: {', '.join(opportunities) or '—'}. "
         f"Coaching: {', '.join(coaching_3)}."
     )
     user_text_summary = (
-        "Buen avance. Refuerza evidencia y acuerda un siguiente paso concreto. "
-        "Prepara 3 preguntas de apertura para conocer mejor a tus pacientes."
+        "Buen avance. Refuerza evidencia concreta y asegura un siguiente paso con fecha. "
+        "Lleva 3 preguntas de apertura para perfilar mejor al paciente."
     )
 
     return {
         "score_14": score_14,
-        "risk": _risk_from_score(score_14),
+        "risk": risk,
         "strengths": strengths,
         "opportunities": opportunities,
         "coaching_3": coaching_3,
@@ -392,7 +411,6 @@ def _validate_internal(internal: dict, user_text: str) -> dict:
             "avg_steps_pct": 0.0,
             "legacy_count": kw_score(user_text),
         }
-    # Si no hay compacto, créalo mínimo
     if "compact" not in internal:
         internal["compact"] = _build_compact(user_text, internal)
     return internal
@@ -407,7 +425,7 @@ def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str
 
     # Señales Da Vinci (% aplicado)
     PHRASE_MAP = {
-        "preparacion": ["objetivo de la visita", "propósito de la visita", "mensaje clave", "smart", "objetivo smart", "mi objetivo hoy es", "plan para hoy", "materiales"],
+        "preparacion": ["objetivo de la visita", "proposito de la visita", "mensaje clave", "smart", "objetivo smart", "mi objetivo hoy es", "plan para hoy", "materiales"],
         "apertura": ["buenos dias", "buen dia", "hola doctora", "como ha estado", "pacientes", "necesidades", "visita anterior", "principal preocupacion", "que le preocupa", "que caracteristicas tienen"],
         "persuasion": ["objetivos de tratamiento", "beneficio", "mecanismo", "estudio", "evidencia", "caracteristicas del producto", "combinado con ibp", "inhibidores de la bomba de protones"],
         "cierre": ["siguiente paso", "podemos acordar", "cuento con usted", "puedo contar con", "le parece si", "empezar a considerar"],
@@ -422,9 +440,9 @@ def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str
     steps_applied_pct = round(100.0 * steps_applied_count / 5.0, 1)
 
     # Puntuaciones propias
-    weighted   = score_weighted_phrases(user_text)
+    weighted    = score_weighted_phrases(user_text)
     davinci_pts = score_davinci_points(user_text)
-    legacy_8   = kw_score(user_text)
+    legacy_8    = kw_score(user_text)
 
     # Calidad + producto
     iq = interaction_quality(user_text)
@@ -436,75 +454,62 @@ def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str
     min_signals = (iq["question_rate"] > 0.15) or (steps_applied_count >= 2)
     low_dialogue_note = (len(nt.split()) < min_tokens) or not min_signals
 
-    # GPT (resumen + valoración cualitativa)
-    try:
-        SYSTEM_PROMPT = textwrap.dedent("""
-        Actúa como coach-evaluador senior de la industria farmacéutica (Alfasigma).
-        El representante presenta ESOXX ONE (puede aparecer como 'esoxx-one' por normalización).
-        Evalúa por fases del Modelo Da Vinci y la calidad de la presentación
-        (claridad, foco clínico, evidencia, posología, manejo de dudas), SOLO con el texto dado.
-        Responde en JSON EXACTO con el FORMATO.
-        """)
-        FORMAT_GUIDE = textwrap.dedent("""
-        {
-          "public_summary": "<máx 120 palabras, tono amable y motivador>",
-          "internal_analysis": {
-            "overall_evaluation": "<2-3 frases objetivas para capacitación>",
-            "Modelo_DaVinci": {
-              "preparacion": "Excelente | Bien | Necesita Mejora",
-              "apertura": "Excelente | Bien | Necesita Mejora",
-              "persuasion": "Excelente | Bien | Necesita Mejora",
-              "cierre": "Excelente | Bien | Necesita Mejora",
-              "analisis_post": "Excelente | Bien | Necesita Mejora"
-            }
-          }
-        }
-        """)
-        convo = f"--- Participante (representante) ---\n{user_text}\n--- Médico (Leo) ---\n{leo_text or '(no disponible)'}"
-        completion = client.chat.completions.create(
-            model=os.getenv("OPENAI_GPT_MODEL", "gpt-4o-mini"),
-            response_format={"type": "json_object"},
-            timeout=40,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT + FORMAT_GUIDE},
-                {"role": "user", "content": convo},
-            ],
-            temperature=0.4,
-        )
-        gpt_json     = json.loads(completion.choices[0].message.content)
-        gpt_public   = gpt_json.get("public_summary", "")
-        gpt_internal = gpt_json.get("internal_analysis", {})
-        level = "alto"
-    except Exception:
-        gpt_public = ("Buen esfuerzo. Refuerza la estructura Da Vinci, usa evidencia clínica concreta de ESOXX ONE "
-                      "y cierra con un siguiente paso claro; practica manejo de objeciones.")
-        gpt_internal = {
-            "overall_evaluation": "Evaluación limitada por conectividad; se generan métricas internas objetivas.",
-            "Modelo_DaVinci": {
-                "preparacion": "Necesita Mejora",
-                "apertura": "Necesita Mejora",
-                "persuasion": "Necesita Mejora",
-                "cierre": "Necesita Mejora",
-                "analisis_post": "Necesita Mejora",
-            }
-        }
-        level = "error"
+    # GPT (resumen semántico profesional para el usuario)
+    gpt_public = ""
+    gpt_internal = {}
+    level = "alto"
+    if _openai:
+        try:
+            SYSTEM_PROMPT = textwrap.dedent("""
+            Actúas como coach-evaluador senior en una simulación de visita médica.
+            El avatar LEO representa al MÉDICO. El PARTICIPANTE es el representante.
+            Escribe un resumen profesional y diplomático para el PARTICIPANTE (segunda persona).
+            Enfócate en: claridad clínica, evidencia, posología, escucha activa y cierre.
+            Máx 120 palabras. Evita repeticiones y frases genéricas.
+            """)
+            convo = f"--- Representante (tú) ---\n{user_text}\n--- Médico (LEO) ---\n{leo_text or '(no disponible)'}"
+            completion = _openai.chat.completions.create(
+                model=os.getenv("OPENAI_GPT_MODEL", "gpt-4o-mini"),
+                response_format={"type": "json_object"},
+                timeout=40,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": json.dumps({
+                        "dialogue": convo,
+                        "hints": {
+                            "low_dialogue": low_dialogue_note,
+                            "closing_present": iq.get("closing_present", False)
+                        }
+                    })},
+                ],
+                temperature=float(os.getenv("GPT_TEMPERATURE", "0.6")),
+            )
+            j = json.loads(completion.choices[0].message.content)
+            gpt_public = j.get("summary","").strip() or ""
+        except Exception:
+            level = "error"
 
-    # KPI promedio (1–3 a 0–10)
+    if not gpt_public:
+        # Fallback diplomático pero breve (evita texto idéntico)
+        tail = "Refuerza evidencia y acuerda un siguiente paso con fecha." if not iq.get("closing_present") else "Buen cierre; agenda seguimiento con criterios clínicos."
+        gpt_public = f"Buen avance. Mantén foco clínico y vincula beneficios con casos de tu médico. {tail}"
+
+    # KPI promedio (1–3 a 0–10) desde modelo cualitativo (si no hay, asumimos 1)
     MAP_Q2N = {"Excelente": 3, "Bien": 2, "Necesita Mejora": 1}
-    md = gpt_internal.get("Modelo_DaVinci", {}) or {}
-    md_scores = [
-        MAP_Q2N.get(md.get("preparacion",   "Necesita Mejora"), 1),
-        MAP_Q2N.get(md.get("apertura",      "Necesita Mejora"), 1),
-        MAP_Q2N.get(md.get("persuasion",    "Necesita Mejora"), 1),
-        MAP_Q2N.get(md.get("cierre",        "Necesita Mejora"), 1),
-        MAP_Q2N.get(md.get("analisis_post", "Necesita Mejora"), 1),
-    ]
-    avg_phase_score_1_3 = round(sum(md_scores) / 5.0, 2)
+    # si no usamos LLM para cualitativo, construimos calificación simple desde banderas
+    qualitative = {
+        "preparacion": "Bien" if sales_model_flags["preparacion"] else "Necesita Mejora",
+        "apertura": "Bien" if sales_model_flags["apertura"] else "Necesita Mejora",
+        "persuasion": "Bien" if davinci_pts.get("persuasion",0)>=2 else "Necesita Mejora",
+        "cierre": "Bien" if iq.get("closing_present") else "Necesita Mejora",
+        "analisis_post": "Bien" if sales_model_flags["analisis_post"] else "Necesita Mejora",
+    }
+    md_scores = [MAP_Q2N.get(v,1) for v in qualitative.values()]
+    avg_phase_score_1_3 = round(sum(md_scores)/5.0, 2)
     avg_score_0_10      = round((avg_phase_score_1_3 - 1) * (10 / 2), 1)
 
     internal_summary = {
-        "overall_training_summary": gpt_internal.get("overall_evaluation", ""),
+        "overall_training_summary": "Síntesis automática basada en señales del diálogo.",
         "knowledge_score_legacy": f"{legacy_8}/8",
         "knowledge_score_legacy_num": legacy_8,
         "knowledge_weighted_total_points": weighted["total_points"],
@@ -526,11 +531,7 @@ def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str
         "active_listening_simple_detection": iq["active_listening_level"],
         "disqualifying_phrases_detected": disq_flag(user_text),
 
-        "gpt_detailed_feedback": {
-            "overall_evaluation": gpt_internal.get("overall_evaluation", ""),
-            "Modelo_DaVinci": md
-        },
-
+        "gpt_detailed_feedback": {"Modelo_DaVinci": qualitative},
         "kpis": {
             "avg_score": avg_score_0_10,
             "avg_phase_score_1_3": avg_phase_score_1_3,
@@ -539,20 +540,25 @@ def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str
         }
     }
 
-    # 👉 Compacto para el admin (antes no existía)
+    # Compacto dinámico para Admin/RH
     internal_summary["compact"] = _build_compact(user_text, internal_summary)
 
-    # Público (diplomático)
-    extra_line = "• Refuerza preguntas y estructura." if (len(normalize(user_text).split()) < 25) else "• Mantén la estructura y refuerza evidencias."
+    # Público (diplomático y específico para el PARTICIPANTE)
+    compact = internal_summary.get("compact", {})
+    dyn_strength = "; ".join(compact.get("strengths", [])[:2]) or "Aprovecha tus fortalezas actuales."
+    dyn_opps     = "; ".join(compact.get("opportunities", [])[:2]) or "Consolida tu estructura y evidencia."
+    kpi_list     = compact.get("kpis", [])[:2]
+    kpi_line     = " · ".join(kpi_list) if kpi_list else ""
+
     public_block = textwrap.dedent(f"""
         {gpt_public}
 
         {vis_pub}
 
-        Áreas sugeridas:
-        • Apoya la explicación de ESOXX ONE con evidencia y posología concreta.
-        • Cierra con un siguiente paso acordado.
-        {extra_line}
+        Fortalezas: {dyn_strength}
+        Oportunidades: {dyn_opps}
+        Frase guía: {compact.get('frase_guia','—')}
+        KPI: {kpi_line}
     """).strip()
 
     # Blindaje de esquema

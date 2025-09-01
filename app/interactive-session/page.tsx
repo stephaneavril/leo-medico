@@ -34,11 +34,11 @@ import { LoaderCircle } from 'lucide-react';
 // ───────────────────────────────────────────────────────────────
 const DEFAULT_CONFIG: StartAvatarRequest = {
   quality: AvatarQuality.Low,
-  avatarName: 'Ann_Doctor_Standing2_public',
+  avatarName: 'Dexter_Doctor_Sitting2_public',
   knowledgeId: '13f254b102cf436d8c07b9fb617dbadf',
   language: 'es',
   voice: {
-    voiceId: '1edf8ae6571d46c8b7e719eaa91f93c6',
+    voiceId: '742eb247d8eb4f1898f4c7d0776707be',
     model: ElevenLabsModel.eleven_multilingual_v2,
     rate: 1.15,
     emotion: VoiceEmotion.FRIENDLY,
