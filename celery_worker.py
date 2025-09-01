@@ -68,7 +68,11 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL env var not set")
 
-TRANSCRIBE_LANG = os.getenv("AWS_TRANSCRIBE_LANG", "es-MX")   # ajustable
+# Idioma: default seguro es-US (AWS no acepta es-MX para Transcribe estándar)
+ENV_LANG = (os.getenv("AWS_TRANSCRIBE_LANG", "es-US") or "es-US").strip()
+LANG_MAP = {"es-MX": "es-US"}  # corrige configuración heredada
+TRANSCRIBE_LANG = LANG_MAP.get(ENV_LANG, ENV_LANG)
+logging.info("[Transcribe] LanguageCode=%s (from %s)", TRANSCRIBE_LANG, ENV_LANG)
 
 # ────────────────── HELPERS S3/FFMPEG/DB ──────────────────
 
@@ -184,10 +188,10 @@ def process_session_transcript(self, payload: dict):
                 TranscriptionJobName=job,
                 Media={"MediaFileUri": audio_url},
                 MediaFormat="wav",
-                LanguageCode=TRANSCRIBE_LANG,  # ej. es-MX / es-US / es-ES
+                LanguageCode=TRANSCRIBE_LANG,  # ej. es-US / es-ES (es-MX se mapea a es-US)
             )
-            # Polling simple
-            for _ in range(60):  # hasta ~8 min (60 * 8s)
+            # Polling simple (hasta ~8 min)
+            for _ in range(60):  # 60 * 8s = 480s
                 status = transcribe.get_transcription_job(TranscriptionJobName=job)["TranscriptionJob"]
                 state = status["TranscriptionJobStatus"]
                 if state in {"COMPLETED", "FAILED"}:
