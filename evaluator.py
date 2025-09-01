@@ -29,6 +29,9 @@ load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 _openai = OpenAI(api_key=OPENAI_API_KEY) if (OPENAI_API_KEY and OpenAI) else None
 
+EVAL_VERSION = "LEO-eval-v3.1"  # <-- cambia este tag cuando despliegues
+print(f"[EVAL] Loaded evaluator version: {EVAL_VERSION}")
+
 # ───────────────────────── Utils ─────────────────────────
 
 def normalize(txt: str) -> str:
@@ -585,6 +588,7 @@ def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str
 
     # Blindaje de esquema
     internal_summary = _validate_internal(internal_summary, user_text)
+    internal_summary["eval_version"] = EVAL_VERSION
 
     return {"public": public_block, "internal": internal_summary, "level": level}
 
