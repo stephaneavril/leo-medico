@@ -1,4 +1,4 @@
-# evaluator.py — versión dinámica (drop-in)
+# evaluator.py — versión dinámica con IA + fallback (drop-in)
 # -------------------------------------------------------------------
 # Analiza una simulación Representante (usuario) ↔ Médico (LEO, avatar)
 # Guarda SIEMPRE métricas en BD cuando se llama vía evaluate_and_persist().
@@ -246,6 +246,7 @@ def interaction_quality(t: str) -> Dict[str, object]:
 # ─────────── Visual express ───────────
 
 def visual_analysis(path: str):
+    # Se conserva en interno; no se menciona en el resumen de usuario
     MAX_FRAMES = int(os.getenv("MAX_FRAMES_TO_CHECK", 60))
     try:
         cap = cv2.VideoCapture(path)
@@ -308,19 +309,19 @@ def _top_hits(detail: Dict[str, dict], k: int = 2) -> List[str]:
 
 def _phrase_guide(iq: dict, prod_total: int, closing_present: bool) -> str:
     pool = [
-        "Propón: 'Con base en lo conversado, ¿le parece iniciar ESOXX-ONE en 1 paciente candidato y revisamos en 2 semanas?'",
+        "Propón: '¿Le parece iniciar ESOXX-ONE en 1 paciente candidato y revisamos en 2 semanas?'",
         "Cierra así: 'Acordemos un siguiente paso: pruebe ESOXX-ONE con un caso y validamos en la próxima visita.'",
         "Sugerencia: 'Si ve utilidad, empecemos con un paciente nocturno/refractario y damos seguimiento.'",
         "Alternativa: '¿Le parece dejar 3 muestras y programar retroalimentación en 14 días?'",
     ]
     if closing_present:
-        return "Refuerza el seguimiento: fija fecha específica y solicita retro clínica (síntomas + adherencia)."
+        return "Refuerza el seguimiento: fija fecha y solicita retro clínica (síntomas + adherencia)."
     if prod_total == 0:
         return "Cierra con acuerdo explícito (paciente candidato + fecha de seguimiento)."
     return random.choice(pool)
 
 def _build_compact(user_text: str, internal: dict) -> dict:
-    """Arma el bloque dinámico para el admin."""
+    """Arma el bloque dinámico para el admin (RH)."""
     legacy_8 = internal.get("knowledge_score_legacy_num") or 0
     davinci = internal.get("da_vinci_points", {}) or {}
     iq = internal.get("interaction_quality", {}) or {}
@@ -377,6 +378,10 @@ def _build_compact(user_text: str, internal: dict) -> dict:
         f"Oportunidades: {', '.join(opportunities) or '—'}. "
         f"Coaching: {', '.join(coaching_3)}."
     )
+
+    # Este campo se llena más adelante con IA (o fallback)
+    analysis_ia = internal.get("compact", {}).get("analysis_ia", "")
+
     user_text_summary = (
         "Buen avance. Refuerza evidencia concreta y asegura un siguiente paso con fecha. "
         "Lleva 3 preguntas de apertura para perfilar mejor al paciente."
@@ -391,6 +396,7 @@ def _build_compact(user_text: str, internal: dict) -> dict:
         "frase_guia": frase_guia,
         "kpis": kpis,
         "rh_text": rh_text,
+        "analysis_ia": analysis_ia,   # ⬅️ Aquí vive la frase corta para RH
         "user_text": user_text_summary,
     }
 
@@ -416,11 +422,11 @@ def _validate_internal(internal: dict, user_text: str) -> dict:
     return internal
 
 def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str] = None) -> Dict[str, object]:
-    # Visual
+    # Análisis visual (solo para interno; NO se menciona en el público)
     vis_pub, vis_int, vis_pct = (
         visual_analysis(video_path)
         if video_path and cv2 and os.path.exists(video_path)
-        else ("⚠️ Sin video disponible.", "No evaluado", "N/A")
+        else ("", "No evaluado", "N/A")
     )
 
     # Señales Da Vinci (% aplicado)
@@ -454,18 +460,22 @@ def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str
     min_signals = (iq["question_rate"] > 0.15) or (steps_applied_count >= 2)
     low_dialogue_note = (len(nt.split()) < min_tokens) or not min_signals
 
-    # GPT (resumen semántico profesional para el usuario)
+    # ===== IA: resumen para USUARIO + análisis_ia para RH =====
     gpt_public = ""
-    gpt_internal = {}
+    analysis_ia = ""
     level = "alto"
+
     if _openai:
         try:
             SYSTEM_PROMPT = textwrap.dedent("""
             Actúas como coach-evaluador senior en una simulación de visita médica.
             El avatar LEO representa al MÉDICO. El PARTICIPANTE es el representante.
-            Escribe un resumen profesional y diplomático para el PARTICIPANTE (segunda persona).
-            Enfócate en: claridad clínica, evidencia, posología, escucha activa y cierre.
-            Máx 120 palabras. Evita repeticiones y frases genéricas.
+            Devuelve JSON EXACTO con:
+            {
+              "public_summary": "<máx 100 palabras, tono diplomático, explica a la PERSONA qué hizo bien, qué faltó y cómo mejorar. Evita frases genéricas.>",
+              "analysis_ia": "<1 frase objetiva para Capacitación (RH) sobre el desempeño global>"
+            }
+            Foco: claridad clínica, evidencia, posología, escucha activa, cierre con acuerdo.
             """)
             convo = f"--- Representante (tú) ---\n{user_text}\n--- Médico (LEO) ---\n{leo_text or '(no disponible)'}"
             completion = _openai.chat.completions.create(
@@ -476,27 +486,40 @@ def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": json.dumps({
                         "dialogue": convo,
-                        "hints": {
-                            "low_dialogue": low_dialogue_note,
-                            "closing_present": iq.get("closing_present", False)
+                        "signals": {
+                            "active_listening": iq.get("active_listening_level"),
+                            "closing_present": iq.get("closing_present", False),
+                            "low_dialogue": low_dialogue_note
                         }
                     })},
                 ],
                 temperature=float(os.getenv("GPT_TEMPERATURE", "0.6")),
             )
             j = json.loads(completion.choices[0].message.content)
-            gpt_public = j.get("summary","").strip() or ""
+            gpt_public = j.get("public_summary", "").strip()
+            analysis_ia = j.get("analysis_ia", "").strip()
         except Exception:
             level = "error"
 
+    # Fallbacks (breves, no genéricos) si la IA no respondió
     if not gpt_public:
-        # Fallback diplomático pero breve (evita texto idéntico)
-        tail = "Refuerza evidencia y acuerda un siguiente paso con fecha." if not iq.get("closing_present") else "Buen cierre; agenda seguimiento con criterios clínicos."
-        gpt_public = f"Buen avance. Mantén foco clínico y vincula beneficios con casos de tu médico. {tail}"
+        tail = "Asegura un cierre con acuerdo y fecha." if not iq.get("closing_present") else "Buen cierre; agenda seguimiento específico."
+        gpt_public = (
+            "Buen tono y enfoque clínico. Refuerza la evidencia con 2–3 frases de estudio y vincula el beneficio al caso del médico. "
+            + tail
+        )
+    if not analysis_ia:
+        # sintetiza en 1 frase según score aproximado
+        approx_total = davinci_pts.get("total", 0) + (2 if iq.get("closing_present") else 0)
+        if approx_total <= 4:
+            analysis_ia = "Desempeño limitado: baja evidencia y ausencia de cierre; requiere trabajar estructura y mensajes clave."
+        elif approx_total <= 8:
+            analysis_ia = "Desempeño intermedio: transmite ideas clave pero falta sustento clínico y cierre consistente."
+        else:
+            analysis_ia = "Desempeño sólido: buen hilo clínico y señales de cierre; mantener consistencia."
 
-    # KPI promedio (1–3 a 0–10) desde modelo cualitativo (si no hay, asumimos 1)
+    # KPIs cualitativos simples (para kpis numéricos ya calculados)
     MAP_Q2N = {"Excelente": 3, "Bien": 2, "Necesita Mejora": 1}
-    # si no usamos LLM para cualitativo, construimos calificación simple desde banderas
     qualitative = {
         "preparacion": "Bien" if sales_model_flags["preparacion"] else "Necesita Mejora",
         "apertura": "Bien" if sales_model_flags["apertura"] else "Necesita Mejora",
@@ -540,24 +563,23 @@ def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str
         }
     }
 
-    # Compacto dinámico para Admin/RH
+    # Compacto dinámico para Admin/RH + frase IA
     internal_summary["compact"] = _build_compact(user_text, internal_summary)
+    internal_summary["compact"]["analysis_ia"] = analysis_ia  # ⬅️ aquí se agrega
 
-    # Público (diplomático y específico para el PARTICIPANTE)
+    # Público (feedback motivador y específico para el PARTICIPANTE)
     compact = internal_summary.get("compact", {})
-    dyn_strength = "; ".join(compact.get("strengths", [])[:2]) or "Aprovecha tus fortalezas actuales."
-    dyn_opps     = "; ".join(compact.get("opportunities", [])[:2]) or "Consolida tu estructura y evidencia."
-    kpi_list     = compact.get("kpis", [])[:2]
-    kpi_line     = " · ".join(kpi_list) if kpi_list else ""
+    dyn_strength = "; ".join(compact.get("strengths", [])[:2]) or "buen manejo de la relación"
+    dyn_opps     = "; ".join(compact.get("opportunities", [])[:2]) or "reforzar evidencia y cerrar con acuerdo"
+    coaching     = "; ".join(compact.get("coaching_3", [])[:2]) or "prepara 3 preguntas de apertura y define un cierre concreto"
+    kpi_line     = " · ".join(compact.get("kpis", [])[:2])
 
     public_block = textwrap.dedent(f"""
         {gpt_public}
 
-        {vis_pub}
-
         Fortalezas: {dyn_strength}
         Oportunidades: {dyn_opps}
-        Frase guía: {compact.get('frase_guia','—')}
+        Recomendación: {coaching}
         KPI: {kpi_line}
     """).strip()
 
