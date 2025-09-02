@@ -29,7 +29,7 @@ load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 _openai = OpenAI(api_key=OPENAI_API_KEY) if (OPENAI_API_KEY and OpenAI) else None
 
-EVAL_VERSION = "LEO-eval-v3.1"  # <-- cambia este tag cuando despliegues
+EVAL_VERSION = "LEO-eval-v3.2"  # 🔸sube la versión para verificar en logs/JSON
 print(f"[EVAL] Loaded evaluator version: {EVAL_VERSION}")
 
 # ───────────────────────── Utils ─────────────────────────
@@ -399,7 +399,7 @@ def _build_compact(user_text: str, internal: dict) -> dict:
         "frase_guia": frase_guia,
         "kpis": kpis,
         "rh_text": rh_text,
-        "analysis_ia": analysis_ia,   # ⬅️ Aquí vive la frase corta para RH
+        "analysis_ia": analysis_ia,   # ⬅️ frase corta para RH
         "user_text": user_text_summary,
     }
 
@@ -512,7 +512,6 @@ def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str
             + tail
         )
     if not analysis_ia:
-        # sintetiza en 1 frase según score aproximado
         approx_total = davinci_pts.get("total", 0) + (2 if iq.get("closing_present") else 0)
         if approx_total <= 4:
             analysis_ia = "Desempeño limitado: baja evidencia y ausencia de cierre; requiere trabajar estructura y mensajes clave."
@@ -569,6 +568,7 @@ def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str
     # Compacto dinámico para Admin/RH + frase IA
     internal_summary["compact"] = _build_compact(user_text, internal_summary)
     internal_summary["compact"]["analysis_ia"] = analysis_ia  # ⬅️ aquí se agrega
+    internal_summary["eval_version"] = EVAL_VERSION
 
     # Público (feedback motivador y específico para el PARTICIPANTE)
     compact = internal_summary.get("compact", {})
@@ -586,13 +586,19 @@ def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str
         KPI: {kpi_line}
     """).strip()
 
-    # Blindaje de esquema
-    internal_summary = _validate_internal(internal_summary, user_text)
-    internal_summary["eval_version"] = EVAL_VERSION
-
     return {"public": public_block, "internal": internal_summary, "level": level}
 
 # ─────────── Persistencia ───────────
+
+def get_db_connection():
+    database_url = os.getenv("DATABASE_URL")
+    if not database_url:
+        raise ValueError("DATABASE_URL environment variable is not set!")
+    parsed = urlparse(database_url)
+    return psycopg2.connect(
+        database=parsed.path[1:], user=parsed.username, password=parsed.password,
+        host=parsed.hostname, port=parsed.port, sslmode="require",
+    )
 
 def evaluate_and_persist(session_id: int, user_text: str, leo_text: str, video_path: Optional[str] = None) -> Dict[str, object]:
     result = evaluate_interaction(user_text, leo_text, video_path)
@@ -602,9 +608,10 @@ def evaluate_and_persist(session_id: int, user_text: str, leo_text: str, video_p
     try:
         conn = get_db_connection()
         with conn.cursor() as cur:
+            # 🔸 Guardamos RH (JSON) y el resumen público (para el cuadro azul)
             cur.execute(
-                "UPDATE interactions SET evaluation_rh = %s WHERE id = %s",
-                (json.dumps(internal), int(session_id))
+                "UPDATE interactions SET evaluation_rh = %s, evaluation = %s WHERE id = %s",
+                (json.dumps(internal, ensure_ascii=False), result.get("public", ""), int(session_id))
             )
         conn.commit()
     except Exception:
