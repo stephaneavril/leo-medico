@@ -85,6 +85,8 @@ WEIGHTED_KWS = {
         "reduccion del uso de antiacidos",
         "demostrado en ninos y adolescentes",
         "reduce la falla al tratamiento",
+        "efecto nocturno reflujo nocturno",
+        "evita agresion por pepsina",
     ],
     "2pt": [
         "protege y repara mucosa esofagica",
@@ -96,6 +98,7 @@ WEIGHTED_KWS = {
         "un sobre despues de cada comida y antes de dormir",
         "esperar por lo menos 30min despues sin tomar alimentos o bebidas",
         "esperar 60min", "esperar 1hr",
+        "bioadhesivo", "barrera bioadhesiva esofagica",
     ],
     "1pt": [
         "mecanismo de proteccion original e innovador para el manejo de la erge",
@@ -114,14 +117,14 @@ DAVINCI_POINTS = {
         1: ["objetivo de la visita", "proposito de la visita", "mensaje clave", "hoy quiero", "plan para hoy", "materiales"],
     },
     "apertura": {
-        2: ["cuales son las mayores preocupaciones", "principal preocupacion", "que caracteristicas tienen sus pacientes", "visita anterior", "me gustaria conocer", "que es lo que mas le preocupa"],
+        2: ["cuales son las mayores preocupaciones",  "cuales sintomas afectan mas la calidad de vida", "principal preocupacion", "que caracteristicas tienen sus pacientes", "visita anterior", "me gustaria conocer", "que es lo que mas le preocupa", "que es lo que mas le preocupa al tratar un paciente con reflujo"],
         1: ["buenos dias", "buen dia", "hola doctora", "mi nombre es", "como ha estado", "gracias por su tiempo"],
     },
     "persuasion": {
-        2: ["que caracteristicas considera ideales", "objetivos de tratamiento", "combinado con ibp", "sinergia con inhibidores de la bomba de protones", "mecanismo", "beneficio", "evidencia", "estudio", "tres componentes", "acido hialuronico", "condroitin", "poloxamero"],
+        2: ["que caracteristicas considera ideales", "objetivos de tratamiento", "combinado con ibp", "sinergia con inhibidores de la bomba de protones", "mecanismo", "beneficio", "evidencia", "estudio", "tres componentes", "acido hialuronico", "condroitin", "poloxamero",  "que esquema de tratamiento normalmente utiliza", "que busca en un tratamiento ideal"],
     },
     "cierre": {
-        2: ["con base a lo dialogado considera que esoxx-one", "podria empezar con algun paciente", "le parece si iniciamos", "empezar a considerar algun paciente", "podemos acordar un siguiente paso", "puedo contar con su apoyo"],
+        2: ["con base a lo dialogado considera que esoxx-one", "que fue lo que mas le atrajo de esoxx-one", "podria empezar con algun paciente", "le parece si iniciamos", "ya tiene en mente algun paciente para iniciar", "empezar a considerar algun paciente", "podemos acordar un siguiente paso", "puedo contar con su apoyo"],
         1: ["siguiente paso", "podemos acordar", "puedo contar con", "le parece si"],
     },
     "analisis_post": {
@@ -144,6 +147,7 @@ PRODUCT_RUBRIC: Dict[str, Dict[str, List[str] | int]] = {
             "barrera bioadhesiva", "recubre el epitelio esofagico", "actua como barrera mecanica",
             "poloxamero 407", "acido hialuronico", "sulfato de condroitina", "tres componentes",
             "dispositivo medico", "sin interacciones con medicamentos", "actua en el esofago",
+            "evita agresion por pepsina", "bioadhesivo",
         ],
     },
     "eficacia": {
@@ -152,6 +156,7 @@ PRODUCT_RUBRIC: Dict[str, Dict[str, List[str] | int]] = {
             "mejora hasta 90% todos los sintomas", "reduce hasta 90% la frecuencia y severidad",
             "alivio en menor tiempo", "reduce la falla al tratamiento", "reduce significativamente los sintomas",
             "sinergia con inhibidores de la bomba de protones", "ibp mas esoxx-one",
+            "2 semanas vs 4 semanas", "efecto nocturno reflujo nocturno",
         ],
     },
     "evidencia": {
@@ -168,6 +173,7 @@ PRODUCT_RUBRIC: Dict[str, Dict[str, List[str] | int]] = {
             "esperar por lo menos 30min", "esperar 60min", "esperar 1hr",
             "liquido a temperatura ambiente y en estado gel a temperatura corporal",
             "formar un gel en el esofago",
+             "un sobre despues de cada comida", "un sobre antes de dormir",
         ],
     },
     "diferenciales": {
@@ -508,7 +514,11 @@ def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str
     if not gpt_public:
         tail = "Asegura un cierre con acuerdo y fecha." if not iq.get("closing_present") else "Buen cierre; agenda seguimiento específico."
         gpt_public = (
+            "¡Muy buen ejercicio! Destacaste el hilo clínico y explicaste bien el mecanismo. "
+            "Se notó tu conocimiento clínico y la seguridad con la que comunicaste. "
             "Buen tono y enfoque clínico. Refuerza la evidencia con 2–3 frases de estudio y vincula el beneficio al caso del médico. "
+            "integra evidencia breve (ej. 2 semanas vs 4 con IBP) y resalta el beneficio nocturno "
+            "y refuerza el beneficio nocturno (barrera bioadhesiva). " 
             + tail
         )
     if not analysis_ia:
