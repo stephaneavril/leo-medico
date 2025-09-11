@@ -82,6 +82,21 @@
     .user-management-actions button[name='regen_token'] { background: #6c757d; }
     .user-management-actions button[name='regen_token']:hover { background: #5a6268; }
 
+    /* Historial */
+    .history-box {
+      margin-top: 16px;
+      background:#f7f9ff;
+      border:1px solid #e1e8ff;
+      border-radius:10px;
+      padding:12px
+    }
+    .history-item {
+      background:#fff;
+      border:1px solid #e6eaff;
+      border-radius:8px;
+      padding:8px 10px;
+    }
+
     footer { text-align: center; padding: 32px; margin-top: 50px; font-size: 0.9em; color: #777; background: var(--bg-white); }
     footer a { color: var(--primary-light); font-weight: 600; }
   </style>
@@ -212,28 +227,78 @@
           <p style="color: gray; text-align: center; margin-bottom: 16px">⏳ Video en procesamiento o no disponible</p>
         {% endif %}
 
-        <!-- Comentario RH + publicar -->
-        <form action="/admin/publish_eval/{{ row[0] }}" method="POST" style="margin-top: 20px">
-          <label for="comment_{{ row[0] }}"><strong>Comentario de Capacitación:</strong></label><br />
-          <textarea id="comment_{{ row[0] }}" name="comment_rh" rows="4" style="width: 100%; margin-top: 6px" placeholder="Escribe tu feedback…"></textarea>
-
-          {# === PARCHE: Mostrar lo que ya se publicó al usuario (rh_comment) === #}
-          {% if row|length > 13 and row[13] %}
-            <div class="evaluation rh" style="margin-top:10px">
-              <h4>Publicado al usuario (último):</h4>
-              <em>{{ row[13] }}</em>
-            </div>
-          {% endif %}
-
-          {% if not row[12] %}
-            <button type="submit" style="margin-top: 10px; width: 100%">✅ Publicar al usuario</button>
-            <button type="submit" formaction="/admin/publish_ai/{{ row[0] }}" formmethod="POST" style="margin-top: 10px; width: 100%; background: #00bfff; color: #000">
-              🤖 Publicar análisis IA tal cual
-            </button>
+        <!-- === Publicación y notas (siempre habilitadas) === -->
+        <div style="margin-top: 20px">
+          <!-- Estado de publicación -->
+          {% if row[12] %}
+            <p style="color: green; font-weight: 600; margin-bottom: 12px; text-align: center;">
+              ✅ Publicado al usuario
+            </p>
           {% else %}
-            <p style="color: green; font-weight: 600; margin-top: 12px; text-align: center;">Publicado en dashboard</p>
+            <p style="color: #666; font-weight: 600; margin-bottom: 12px; text-align: center;">
+              🔒 Aún no publicado
+            </p>
           {% endif %}
-        </form>
+
+          <!-- Formulario: comentario PÚBLICO (visible al usuario) -->
+          <form action="/admin/publish_eval/{{ row[0] }}" method="POST" style="margin-top: 10px">
+            <label for="comment_pub_{{ row[0] }}"><strong>Agregar comentario público (visible para el usuario):</strong></label><br />
+            <textarea id="comment_pub_{{ row[0] }}" name="comment_rh" rows="4"
+                      style="width: 100%; margin-top: 6px"
+                      placeholder="Escribe tu comentario para el usuario…"></textarea>
+
+            <!-- (Opcional) mostrar último publicado si el backend lo incluyera como row[13] -->
+            {% if row|length > 13 and row[13] %}
+              <div class="evaluation rh" style="margin-top:10px">
+                <h4>Publicado al usuario (último):</h4>
+                <em>{{ row[13] }}</em>
+              </div>
+            {% endif %}
+
+            <button type="submit" style="margin-top: 10px; width: 100%">➕ Publicar comentario</button>
+          </form>
+
+          <!-- Formulario: NOTA INTERNA (solo RH) -->
+          <form action="/admin/add_note/{{ row[0] }}" method="POST" style="margin-top: 16px">
+            <label for="note_int_{{ row[0] }}"><strong>Agregar nota interna (sólo RH):</strong></label><br />
+            <textarea id="note_int_{{ row[0] }}" name="note_body" rows="3"
+                      style="width: 100%; margin-top: 6px"
+                      placeholder="Escribe una nota interna…"></textarea>
+            <button type="submit" class="btn-ghost" style="margin-top: 10px; width: 100%">📝 Guardar nota interna</button>
+          </form>
+
+          <!-- Botón opcional: publicar análisis IA tal cual -->
+          {% if not row[12] %}
+            <form action="/admin/publish_ai/{{ row[0] }}" method="POST" style="margin-top: 10px">
+              <button type="submit" style="width: 100%; background: #00bfff; color: #000">
+                🤖 Publicar análisis IA tal cual
+              </button>
+            </form>
+          {% endif %}
+
+          <!-- Historial de comentarios (si el backend lo pasa como row[14]) -->
+          {% set comments = row[14] if row|length > 14 else [] %}
+          <div class="history-box">
+            <strong style="display:block; margin-bottom:6px;">Historial de comentarios</strong>
+            {% if comments and comments|length > 0 %}
+              <ul style="list-style:none; padding:0; margin:0; display:flex; flex-direction:column; gap:8px;">
+                {% for c in comments %}
+                  <li class="history-item">
+                    <div style="display:flex; justify-content:space-between; gap:8px;">
+                      <span style="font-weight:600; color:#334;">{{ c.author or 'Capacitación' }}</span>
+                      <span style="font-size:12px; color:#667;">{{ c.created }}</span>
+                    </div>
+                    <div style="font-size:13px; color:#222; white-space:pre-wrap; margin-top:4px;">
+                      {{ c.body }}
+                    </div>
+                  </li>
+                {% endfor %}
+              </ul>
+            {% else %}
+              <p style="color:#667; margin:0;">Sin comentarios todavía.</p>
+            {% endif %}
+          </div>
+        </div>
       </div>
     </div>
     {% endfor %}
