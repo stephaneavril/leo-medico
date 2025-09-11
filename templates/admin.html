@@ -217,6 +217,14 @@
           <label for="comment_{{ row[0] }}"><strong>Comentario de Capacitación:</strong></label><br />
           <textarea id="comment_{{ row[0] }}" name="comment_rh" rows="4" style="width: 100%; margin-top: 6px" placeholder="Escribe tu feedback…"></textarea>
 
+          {# === PARCHE: Mostrar lo que ya se publicó al usuario (rh_comment) === #}
+          {% if row|length > 13 and row[13] %}
+            <div class="evaluation rh" style="margin-top:10px">
+              <h4>Publicado al usuario (último):</h4>
+              <em>{{ row[13] }}</em>
+            </div>
+          {% endif %}
+
           {% if not row[12] %}
             <button type="submit" style="margin-top: 10px; width: 100%">✅ Publicar al usuario</button>
             <button type="submit" formaction="/admin/publish_ai/{{ row[0] }}" formmethod="POST" style="margin-top: 10px; width: 100%; background: #00bfff; color: #000">

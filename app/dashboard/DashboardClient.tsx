@@ -4,6 +4,13 @@ import React from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 
+type PublicComment = {
+  id: number;
+  author: string;
+  body: string;
+  created: string; // "YYYY-MM-DD HH:MM"
+};
+
 interface SessionRecord {
   id?: number;
   scenario: string;
@@ -16,6 +23,8 @@ interface SessionRecord {
   tip: string;
   visual_feedback: string;
   duration: number;
+  visible_to_user?: boolean;
+  comments_public?: PublicComment[];
 }
 
 interface DashboardData {
@@ -72,9 +81,11 @@ export default function DashboardClient({
     ...s,
     video_s3: s.video_s3 && !SENTINELS.includes(s.video_s3) ? s.video_s3 : null,
     created_at: s.created_at ? new Date(s.created_at).toLocaleString() : '',
+    comments_public: Array.isArray(s.comments_public) ? s.comments_public : [],
   }));
 
-  const visibleRecords = records.filter((r) => r.coach_advice || r.rh_evaluation);
+  // Solo mostrar sesiones que tengan algo publicado para el usuario
+  const visibleRecords = records.filter((r) => (r.coach_advice || r.rh_evaluation) && (r.visible_to_user ?? true));
 
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
@@ -229,6 +240,21 @@ export default function DashboardClient({
         }
         .notice-steps{ margin: 0; padding-left: 18px; line-height: 1.55; }
         .notice-steps li{ margin: 4px 0; }
+
+        /* Historial */
+        .history-box {
+          margin-top: 12px;
+          padding: 12px;
+          border-radius: 12px;
+          background: #f6f9ff;
+          border: 1px solid #e4ecff;
+        }
+        .history-item {
+          background: #fff;
+          border: 1px solid #e6eefc;
+          border-radius: 10px;
+          padding: 10px 12px;
+        }
       `}</style>
 
       <div className="dashboard-page-container">
@@ -257,7 +283,7 @@ export default function DashboardClient({
             </div>
           </section>
 
-          {/* === Pasos de uso (restaurados) === */}
+          {/* === Pasos de uso === */}
           <section className="howto-box">
             <h3>Cómo aprovechar a Leo en 7 pasos</h3>
             <ol>
@@ -322,6 +348,33 @@ export default function DashboardClient({
                       <strong>Mensaje de Capacitación</strong>
                     </p>
                     <p style={{ marginBottom: 0 }}>{r.rh_evaluation}</p>
+                  </div>
+                )}
+
+                {/* Historial público de comentarios */}
+                {r.visible_to_user && (
+                  <div className="history-box">
+                    <div className="flex items-center justify-between">
+                      <div className="text-sm font-semibold text-slate-600">Historial de comentarios</div>
+                      <div className="text-xs text-slate-500">{r.comments_public?.length || 0} registros</div>
+                    </div>
+                    {(!r.comments_public || r.comments_public.length === 0) ? (
+                      <p className="mt-2 text-slate-600 text-sm" style={{ margin: 0 }}>Aún no hay historial.</p>
+                    ) : (
+                      <ul className="mt-2 space-y-2" style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+                        {r.comments_public.map((c) => (
+                          <li key={c.id} className="history-item">
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs font-medium text-slate-700">{c.author || 'Capacitación'}</span>
+                              <span className="text-[11px] text-slate-500">{c.created}</span>
+                            </div>
+                            <p className="mt-1 text-slate-800 text-sm" style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
+                              {c.body}
+                            </p>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
                   </div>
                 )}
 
