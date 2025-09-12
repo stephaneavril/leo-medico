@@ -29,18 +29,24 @@ import { LoadingIcon } from '@/components/Icons';
 import { MessageHistory } from '@/components/AvatarSession/MessageHistory';
 import { LoaderCircle } from 'lucide-react';
 
-/** Transporte con fallback:
- *  - Preferimos WEBRTC si existe en el SDK.
- *  - Si no, usamos WEBSOCKET (o el primer valor disponible).
- */
+/** ─────────────────────────────────────────────────────────────
+ * Transporte con preferencia en WebRTC (si existe en el SDK).
+ * Si no existe WEBRTC en tu build, caerá a WS/WEBSOCKET.
+ * Además, logueamos para ver qué quedó seleccionado.
+ * ────────────────────────────────────────────────────────────*/
 const RESOLVED_TRANSPORT: any = (() => {
   const vct: any = VoiceChatTransport as any;
-  return (
+  const pick =
     vct?.WEBRTC ??
     vct?.WEBSOCKET ??
     vct?.WS ??
-    (Array.isArray(Object.values(vct)) ? Object.values(vct)[0] : undefined)
-  );
+    (Array.isArray(Object.values(vct)) ? Object.values(vct)[0] : undefined);
+  // Log de diagnóstico
+  // Nota: algunos SDKs exponen enums como números; esto imprime ambos.
+  // @ts-ignore
+  console.log('[HeyGen] Transport enum keys:', Object.keys(VoiceChatTransport || {}));
+  console.log('[HeyGen] RESOLVED_TRANSPORT ⇒', pick);
+  return pick;
 })();
 
 // Config por defecto del avatar
@@ -95,6 +101,8 @@ function InteractiveSessionContent() {
   const voiceStartedOnceRef = useRef(false);
   const reconnectingRef = useRef(false);
   const silenceGuardTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const firstUserTurnFallbackRef = useRef(false); // ← fallback del primer turno
+  const lastAvatarTTSAtRef = useRef<number>(0);
 
   const recordingTimerRef = useRef<number>(480);
   const [timerDisplay, setTimerDisplay] = useState('08:00');
@@ -122,7 +130,6 @@ function InteractiveSessionContent() {
       } else if (typeof a.send === 'function') {
         await a.send(text);
       }
-      // Si ninguno existe, no hacemos nada (no crítico).
     } catch (e) {
       console.warn('trySpeak fallback warning:', e);
     }
@@ -185,9 +192,7 @@ function InteractiveSessionContent() {
       isFinalizingRef.current = true;
       setIsUploading(true);
 
-      try {
-        stopAvatar();
-      } catch {}
+      try { stopAvatar(); } catch {}
       setIsVoiceActive(false);
 
       const finalize = async () => {
@@ -259,16 +264,19 @@ function InteractiveSessionContent() {
   const fetchAccessToken = useCallback(async () => {
     const res = await fetch('/api/get-access-token', { method: 'POST' });
     if (!res.ok) throw new Error(`Fallo al obtener token de acceso: ${res.status}`);
-    return res.text();
+    const txt = await res.text();
+    console.log('[HeyGen] Access token length:', txt?.length ?? 0);
+    return txt;
   }, []);
 
   // Silence guard
   const armSilenceGuard = useCallback(() => {
     if (silenceGuardTimerRef.current) clearTimeout(silenceGuardTimerRef.current);
     silenceGuardTimerRef.current = setTimeout(async () => {
-      await trySpeak(
-        'Perdona, tuve un pequeño retraso. Ya te escucho, ¿puedes repetir o continuar?'
-      );
+      // si no hubo TTS en los últimos 3s, nudge
+      if (Date.now() - lastAvatarTTSAtRef.current > 3000) {
+        await trySpeak('Perdona, tuve un pequeño retraso. Ya te escucho, ¿puedes repetir o continuar?');
+      }
     }, 5000);
   }, [trySpeak]);
 
@@ -296,10 +304,21 @@ function InteractiveSessionContent() {
           console.log('USER_STT:', e.detail);
           handleUserTalkingMessage({ detail: e.detail });
           armSilenceGuard();
+
+          // Fallback del primer turno: si en ~1s no hay TTS, saludamos.
+          if (!firstUserTurnFallbackRef.current) {
+            firstUserTurnFallbackRef.current = true;
+            setTimeout(() => {
+              if (Date.now() - lastAvatarTTSAtRef.current > 900) {
+                trySpeak('Hola, te escucho. Cuéntame, ¿en qué puedo ayudarte hoy?');
+              }
+            }, 1000);
+          }
         });
 
         avatar.on(StreamingEvents.AVATAR_TALKING_MESSAGE, (e: any) => {
           console.log('AVATAR_TTS:', e.detail);
+          lastAvatarTTSAtRef.current = Date.now();
           handleStreamingTalkingMessage({ detail: e.detail });
           cancelSilenceGuard();
         });
@@ -317,16 +336,28 @@ function InteractiveSessionContent() {
           }
         });
 
-        // Hook de error genérico (algunas builds emiten eventos distintos)
         (avatar as any).on?.((StreamingEvents as any).ERROR ?? 'error', (err: any) => {
           console.error('STREAM_ERROR:', err);
         });
 
         avatar.on(StreamingEvents.STREAM_READY, async () => {
           console.log('STREAM_READY');
+
+          // Asegurar audio del video remoto
+          try {
+            if (avatarVideoRef.current) {
+              avatarVideoRef.current.muted = false;  // IMPORTANTE
+              avatarVideoRef.current.volume = 1.0;   // IMPORTANTE
+              await avatarVideoRef.current.play().catch(() => {});
+            }
+          } catch (e) {
+            console.warn('No se pudo auto-reproducir el video remoto:', e);
+            setShowAutoplayBlockedMessage(true);
+          }
+
           setIsAttemptingAutoStart(false);
 
-          // Mensaje de bienvenida (usando helper que evita error TS)
+          // Saludo de arranque (por si el agente tarda)
           await trySpeak('Hola, ya te escucho. Cuando quieras, empezamos.');
 
           if (withVoice && !voiceStartedOnceRef.current) {
@@ -341,6 +372,7 @@ function InteractiveSessionContent() {
           }
         });
 
+        // ¡Ojo!: pasamos explícitamente el transporte resuelto
         await startAvatar({ ...config, voiceChatTransport: RESOLVED_TRANSPORT as any });
       } catch (err: any) {
         console.error('Error iniciando sesión con HeyGen:', err);
@@ -421,6 +453,8 @@ function InteractiveSessionContent() {
     if (stream && avatarVideoRef.current) {
       avatarVideoRef.current.srcObject = stream;
       avatarVideoRef.current.onloadedmetadata = () => {
+        avatarVideoRef.current!.muted = false;
+        avatarVideoRef.current!.volume = 1.0;
         avatarVideoRef.current!.play().catch(() => {
           setShowAutoplayBlockedMessage(true);
         });
@@ -434,9 +468,7 @@ function InteractiveSessionContent() {
     if (sessionState === StreamingAvatarSessionState.CONNECTED) {
       id = setInterval(() => {
         recordingTimerRef.current -= 1;
-        const m = Math.floor(recordingTimerRef.current / 60)
-          .toString()
-          .padStart(2, '0');
+        const m = Math.floor(recordingTimerRef.current / 60).toString().padStart(2, '0');
         const s = (recordingTimerRef.current % 60).toString().padStart(2, '0');
         setTimerDisplay(`${m}:${s}`);
         if (recordingTimerRef.current <= 0) {
