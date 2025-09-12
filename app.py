@@ -630,12 +630,19 @@ def admin_panel():
 # ---------------- Inicio de sesión del usuario ----------------
 @app.route("/start-session", methods=["POST"])
 def start_session():
-    name     = request.form.get("name")
-    email    = request.form.get("email")
-    scenario = request.form.get("scenario")
+    # 1) Leer y sanitizar inputs
+    name     = (request.form.get("name") or "").strip()
+    email    = (request.form.get("email") or "").strip().lower()
+    scenario = (request.form.get("scenario") or "").strip()
+
+    # Sanitizar: si parece un JWT (dos puntos), es muy largo o viene vacío → usar default.
+    if scenario.count(".") >= 2 or len(scenario) > 80 or not scenario:
+        scenario = "Entrevista con médico"
+
     if not all([name, email, scenario]):
         return "Faltan datos.", 400
 
+    # 2) Validar usuario en BD
     today = date.today().isoformat()
     conn  = get_db_connection()
     try:
@@ -649,18 +656,27 @@ def start_session():
     finally:
         conn.close()
 
-    if not row: return "Usuario no registrado.", 403
+    if not row:
+        return "Usuario no registrado.", 403
     active, start, end = row
-    if not active or not (start <= today <= end): return "Sin vigencia.", 403
+    if not active or not (start <= today <= end):
+        return "Sin vigencia.", 403
 
+    # 3) Crear JWT válido 1h
     payload = {
-        "name": name, "email": email, "scenario": scenario,
-        "iat": datetime.utcnow(), "exp": datetime.utcnow() + timedelta(hours=1)
+        "name":     name,
+        "email":    email,
+        "scenario": scenario,
+        "iat": datetime.utcnow(),
+        "exp": datetime.utcnow() + timedelta(hours=1),
     }
     token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG)
+
+    # 4) Redirigir al front con el token
     url = f"{FRONTEND_URL}/dashboard?auth={token}"
-    print("DEBUG_REDIRECT ->", url)
+    print("DEBUG_REDIRECT ->", url, " | scenario:", scenario)
     return redirect(url, code=302)
+
 
 @app.route("/validate_user", methods=["POST"])
 def validate_user_endpoint():
