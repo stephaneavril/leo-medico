@@ -22,7 +22,7 @@ import {
 } from '@/components/logic';
 
 import { Button } from '@/components/Button';
-  import { AvatarConfig } from '@/components/AvatarConfig';
+import { AvatarConfig } from '@/components/AvatarConfig';
 import { AvatarVideo } from '@/components/AvatarSession/AvatarVideo';
 import { AvatarControls } from '@/components/AvatarSession/AvatarControls';
 import { LoadingIcon } from '@/components/Icons';
@@ -43,10 +43,8 @@ const DEFAULT_CONFIG: StartAvatarRequest = {
     rate: 1.15,
     emotion: VoiceEmotion.FRIENDLY,
   },
-  // Tu SDK soporta WS (mantener)
-  voiceChatTransport: VoiceChatTransport.WEBSOCKET,
-  // Deja el STT por defecto (no forzar Deepgram por ahora)
-  // sttSettings: { provider: STTProvider.DEEPGRAM },
+  // WebRTC es más estable para STT/TTS
+  voiceChatTransport: VoiceChatTransport.WEBRTC,
 };
 
 function InteractiveSessionContent() {
@@ -79,9 +77,14 @@ function InteractiveSessionContent() {
   const [isAttemptingAutoStart, setIsAttemptingAutoStart] = useState(false);
   const [hasUserMediaPermission, setHasUserMediaPermission] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
-  const [isVoiceActive, setIsVoiceActive] = useState(false); // ← nuevo
+  const [isVoiceActive, setIsVoiceActive] = useState(false);
 
   // ── Refs ─────────────────────────────────────────────────────
+  const avatarRef = useRef<any>(null);
+  const voiceStartedOnceRef = useRef(false);
+  const reconnectingRef = useRef(false);
+  const silenceGuardTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const recordingTimerRef = useRef<number>(480);
   const [timerDisplay, setTimerDisplay] = useState('08:00');
   const messagesRef = useRef<any[]>([]);
@@ -153,8 +156,10 @@ function InteractiveSessionContent() {
       isFinalizingRef.current = true;
       setIsUploading(true);
 
-      stopAvatar();
-      setIsVoiceActive(false); // ← apaga flag voz
+      try {
+        stopAvatar();
+      } catch {}
+      setIsVoiceActive(false);
 
       const finalize = async () => {
         stopUserCameraRecording();
@@ -228,6 +233,25 @@ function InteractiveSessionContent() {
     return res.text();
   }, []);
 
+  // ── Silencio guard (si no hay respuesta del avatar) ─────────
+  const armSilenceGuard = useCallback(() => {
+    if (silenceGuardTimerRef.current) clearTimeout(silenceGuardTimerRef.current);
+    silenceGuardTimerRef.current = setTimeout(async () => {
+      try {
+        await avatarRef.current?.speakText?.(
+          'Perdona, tuve un pequeño retraso. Ya te escucho, ¿puedes repetir o continuar?'
+        );
+      } catch {}
+    }, 5000);
+  }, []);
+
+  const cancelSilenceGuard = useCallback(() => {
+    if (silenceGuardTimerRef.current) {
+      clearTimeout(silenceGuardTimerRef.current);
+      silenceGuardTimerRef.current = null;
+    }
+  }, []);
+
   // ── Start session with HeyGen ────────────────────────────────
   const startHeyGenSession = useCallback(
     async (withVoice: boolean) => {
@@ -239,34 +263,58 @@ function InteractiveSessionContent() {
       try {
         const heygenToken = await fetchAccessToken();
         const avatar = initAvatar(heygenToken);
+        avatarRef.current = avatar;
 
-        // Logs para diagnosticar
-        avatar.on(StreamingEvents.USER_TALKING_MESSAGE, (e) => {
+        // Logs y manejo de silencio
+        avatar.on(StreamingEvents.USER_TALKING_MESSAGE, (e: any) => {
           console.log('USER_STT:', e.detail);
           handleUserTalkingMessage({ detail: e.detail });
+          // prepara un “nudge” si no hay respuesta en X seg.
+          armSilenceGuard();
         });
-        avatar.on(StreamingEvents.AVATAR_TALKING_MESSAGE, (e) => {
+
+        avatar.on(StreamingEvents.AVATAR_TALKING_MESSAGE, (e: any) => {
           console.log('AVATAR_TTS:', e.detail);
           handleStreamingTalkingMessage({ detail: e.detail });
+          // llegó respuesta → cancela nudge
+          cancelSilenceGuard();
         });
 
         avatar.on(StreamingEvents.STREAM_DISCONNECTED, () => {
-          if (!isFinalizingRef.current) stopAndFinalizeSession(messagesRef.current);
+          console.warn('STREAM_DISCONNECTED');
+          cancelSilenceGuard();
           setIsVoiceActive(false);
+          if (!isFinalizingRef.current && !reconnectingRef.current) {
+            reconnectingRef.current = true;
+            // intenta reanudar una sola vez
+            setTimeout(() => {
+              reconnectingRef.current = false;
+              startHeyGenSession(withVoice).catch(() => {});
+            }, 1500);
+          }
+        });
+
+        // Algunos SDK lanzan errores por DataChannel: los logueamos y seguimos
+        avatar.on((StreamingEvents as any).ERROR ?? 'error', (err: any) => {
+          console.error('STREAM_ERROR:', err);
         });
 
         // Arranca VOZ sólo cuando el stream está listo
         avatar.on(StreamingEvents.STREAM_READY, async () => {
+          console.log('STREAM_READY');
           setIsAttemptingAutoStart(false);
 
-          // Confirmación audible
           try {
-            await (avatar as any)?.speakText?.('Hola, ya te escucho. Cuando quieras, empezamos.');
-          } catch {}
+            // Bienvenida para confirmar TTS
+            await avatar?.speakText?.('Hola, ya te escucho. Cuando quieras, empezamos.');
+          } catch (e) {
+            console.warn('speakText de bienvenida falló (no crítico):', e);
+          }
 
-          if (withVoice) {
+          if (withVoice && !voiceStartedOnceRef.current) {
             try {
-              await startVoiceChat();        // enciende STT
+              await startVoiceChat();        // enciende STT (una vez)
+              voiceStartedOnceRef.current = true;
               setIsVoiceActive(true);
               console.log('startVoiceChat OK');
             } catch (e) {
@@ -275,8 +323,8 @@ function InteractiveSessionContent() {
           }
         });
 
-        await startAvatar(config); // levanta el stream
-        // NOTA: no llames startVoiceChat aquí; ya lo hacemos en STREAM_READY
+        await startAvatar({ ...config, voiceChatTransport: VoiceChatTransport.WEBRTC });
+        // NOTA: no llamar startVoiceChat aquí; ya lo hacemos en STREAM_READY
       } catch (err: any) {
         console.error('Error iniciando sesión con HeyGen:', err);
         setShowAutoplayBlockedMessage(true);
@@ -291,7 +339,8 @@ function InteractiveSessionContent() {
       config,
       startAvatar,
       startVoiceChat,
-      stopAndFinalizeSession,
+      armSilenceGuard,
+      cancelSilenceGuard,
       handleUserTalkingMessage,
       handleStreamingTalkingMessage,
     ]
@@ -305,7 +354,10 @@ function InteractiveSessionContent() {
     }
     if (sessionState === StreamingAvatarSessionState.CONNECTED) {
       try {
-        await startVoiceChat();
+        if (!voiceStartedOnceRef.current) {
+          await startVoiceChat();
+          voiceStartedOnceRef.current = true;
+        }
         setIsVoiceActive(true);
         console.log('startVoiceChat OK (sesión ya conectada)');
       } catch (e) {
