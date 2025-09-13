@@ -20,6 +20,7 @@ from flask import (
 )
 from flask_cors import CORS
 import jwt
+from flask_cors import cross_origin
 
 # 1) Carga variables de entorno
 load_dotenv(override=True)
@@ -31,15 +32,21 @@ os.makedirs(TEMP_PROCESSING_FOLDER, exist_ok=True)
 # 3) Define BASE_DIR para plantillas y estáticos
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 
-# 4) Instancia la app UNA SOLA VEZ, con template y static
+# 4) Instancia la app
 app = Flask(
     __name__,
     template_folder=os.path.join(BASE_DIR, 'templates'),
     static_folder=os.path.join(BASE_DIR, 'static'),
 )
 app.secret_key = os.getenv("FLASK_SECRET_KEY", secrets.token_hex(16))
+# cookies más seguras
+app.config.update(
+    SESSION_COOKIE_SECURE=True,
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+)
 
-# 5) CORS solo para tu frontend
+# 5) CORS sólo para tu frontend
 CORS(
     app,
     resources={r"/*": {"origins": [os.getenv("FRONTEND_URL", "https://leo-api-ryzd.onrender.com")]}},
@@ -50,12 +57,38 @@ CORS(
 
 print("🚀 Iniciando Leo Virtual Trainer (Modo Producción)…")
 
-# Debug env
+# ---------------- Constantes / JWT / Auth ----------------
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
+JWT_SECRET = os.getenv("JWT_SECRET", "dev-secret")
+JWT_ALG    = "HS256"
+FRONTEND_URL = os.getenv("FRONTEND_URL", "https://leo-api-ryzd.onrender.com")
+
+SENTINELS = [
+    'Video_Not_Available_Error',
+    'Video_Processing_Failed',
+    'Video_Missing_Error'
+]
+
+def jwt_required(f):
+    @wraps(f)
+    def _wrap(*args, **kwargs):
+        auth = request.headers.get("Authorization", "")
+        token = auth.split("Bearer ", 1)[1] if auth.startswith("Bearer ") else None
+        if not token:
+            return jsonify(error="token faltante"), 401
+        try:
+            payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
+            request.jwt = payload
+        except Exception:
+            return jsonify(error="token inválido o usuario no autorizado"), 401
+        return f(*args, **kwargs)
+    return _wrap
+
+# ---------------- AWS ----------------
 print(f"DEBUG: OPENAI_API_KEY (first 5 chars): {os.getenv('OPENAI_API_KEY', 'N/A')[:5]}...")
 print(f"DEBUG: AWS_ACCESS_KEY_ID: {os.getenv('AWS_ACCESS_KEY_ID', 'N/A')}")
 print(f"DEBUG: AWS_SECRET_ACCESS_KEY (last 5 chars): ...{os.getenv('AWS_SECRET_ACCESS_KEY', 'N/A')[-5:]}")
 
-# AWS
 AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
 AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
 AWS_S3_BUCKET_NAME = os.getenv("AWS_S3_BUCKET_NAME", "").split("#",1)[0].strip().strip("'\"")
@@ -72,7 +105,8 @@ s3_client = boto3.client(
     region_name=AWS_S3_REGION_NAME
 )
 
-@app.route("/get_presigned_url/<key>")
+@app.route("/get_presigned_url/<path:key>")
+@jwt_required  # o valida session["admin"] si lo prefieres
 def get_presigned_url(key):
     url = s3_client.generate_presigned_url(
         ClientMethod="get_object",
@@ -81,7 +115,7 @@ def get_presigned_url(key):
     )
     return jsonify({"url": url})
 
-# DB helpers
+# ---------------- DB helpers ----------------
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     raise ValueError("DATABASE_URL environment variable is not set!")
@@ -120,12 +154,6 @@ def log_request_info():
             print("DEBUG_HOOK: No JSON data or invalid JSON")
 
 app.config['UPLOAD_FOLDER'] = TEMP_PROCESSING_FOLDER
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
-
-# JWT
-JWT_SECRET = os.getenv("JWT_SECRET", "dev-secret")
-JWT_ALG    = "HS256"
-FRONTEND_URL = os.getenv("FRONTEND_URL", "https://leo-api-ryzd.onrender.com")
 
 # ---------------- DB bootstrap ----------------
 def init_db():
@@ -226,10 +254,17 @@ def patch_db_schema():
     finally:
         if conn: conn.close()
 
-init_db()
-patch_db_schema()
+def ensure_db_indexes():
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_interactions_email ON interactions(email);")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_interactions_email_ts ON interactions(email, timestamp);")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);")
+        conn.commit()
+    finally:
+        conn.close()
 
-# ── MIGRACIÓN MÍNIMA: historial de comentarios ───────────────────────
 def ensure_comments_table():
     sql_create = """
     CREATE TABLE IF NOT EXISTS interaction_comments (
@@ -257,6 +292,9 @@ def ensure_comments_table():
     finally:
         conn.close()
 
+init_db()
+patch_db_schema()
+ensure_db_indexes()
 ensure_comments_table()
 
 # ---------------- Utilidades varias ----------------
@@ -275,6 +313,41 @@ def issue_jwt(payload: dict, days: int = 7) -> str:
     payload = payload.copy()
     payload.update({"iat": datetime.utcnow(), "exp": datetime.utcnow() + timedelta(days=days)})
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG)
+
+def _parse_training_json(raw: str):
+    """Parsea el 'Mensaje de Capacitación' (JSON o texto) para la UI."""
+    if not raw:
+        return {"is_json": False, "raw": ""}
+    try:
+        d = json.loads(raw)
+        return {
+            "is_json": True,
+            "raw": d,
+            "summary": d.get("overall_training_summary") or "",
+            "risk": d.get("compact", {}).get("risk") or d.get("risk"),
+            "strengths": d.get("compact", {}).get("strengths") or d.get("strengths") or [],
+            "opportunities": d.get("opportunities") or d.get("compact", {}).get("opportunities") or [],
+            "kpi_avg": (d.get("kpis") or {}).get("avg_score"),
+            "product_score_total": d.get("product_score_total"),
+            "da_vinci": {
+                "prep": (d.get("da_vinci_points") or {}).get("preparacion") or (d.get("da_vinci_points") or {}).get("preparación"),
+                "open": (d.get("da_vinci_points") or {}).get("apertura"),
+                "persuasion": (d.get("da_vinci_points") or {}).get("persuasion"),
+                "close": (d.get("da_vinci_points") or {}).get("cierre"),
+            },
+        }
+    except Exception:
+        return {"is_json": False, "raw": raw}
+
+def _is_recent(ts, hours=36):
+    """Para marcar 'Nuevo': si la interacción es reciente."""
+    if not ts: return False
+    try:
+        if isinstance(ts, str):
+            ts = datetime.fromisoformat(ts.replace("Z",""))
+        return (datetime.utcnow() - ts) <= timedelta(hours=hours)
+    except Exception:
+        return False
 
 # ---------------- Rutas de usuarios ----------------
 @app.post("/admin/users")
@@ -324,7 +397,6 @@ def check_user_token(email: str, token: str) -> bool:
             row = cur.fetchone()
         if not row: return False
         active, start, end, stored_token = row
-        print(f"[DEBUG] cookie_token='{token}'  stored_token='{stored_token}'")
         return (
             active
             and (start is None or start <= today)
@@ -413,7 +485,7 @@ def build_performance_summaries(processed_data: list[list]) -> list[dict]:
             legacy_pct = (legacy_num / max(1, legacy_den)) * 100.0
 
             dv_norm = min(dv_total, 8) / 8.0 * 100.0
-            _ = 0.5 * dv_norm + 0.5 * legacy_pct  # compuesto (no se usa directo aquí)
+            _ = 0.5 * dv_norm + 0.5 * legacy_pct
 
             red = 1 if internal.get("disqualifying_phrases_detected") else 0
 
@@ -455,7 +527,7 @@ def build_performance_summaries(processed_data: list[list]) -> list[dict]:
     summaries.sort(key=lambda x: x["avg_score"], reverse=True)
     return summaries
 
-# ---------------- Admin Panel ----------------
+# ---------------- Admin Panel (legacy) ----------------
 @app.route("/admin", methods=["GET", "POST"])
 def admin_panel():
     if not session.get("admin"):
@@ -496,7 +568,6 @@ def admin_panel():
                 c.execute("UPDATE users SET token = %s WHERE id = %s", (new_token, user_id))
             conn.commit()
 
-        # SELECT actualizado con rh_comment (13) y comments_json (14)
         c.execute("""
             SELECT
                 i.id, i.name, i.email, i.scenario, i.message, i.response, i.audio_path,
@@ -630,19 +701,16 @@ def admin_panel():
 # ---------------- Inicio de sesión del usuario ----------------
 @app.route("/start-session", methods=["POST"])
 def start_session():
-    # 1) Leer y sanitizar inputs
     name     = (request.form.get("name") or "").strip()
     email    = (request.form.get("email") or "").strip().lower()
     scenario = (request.form.get("scenario") or "").strip()
 
-    # Sanitizar: si parece un JWT (dos puntos), es muy largo o viene vacío → usar default.
     if scenario.count(".") >= 2 or len(scenario) > 80 or not scenario:
         scenario = "Entrevista con médico"
 
     if not all([name, email, scenario]):
         return "Faltan datos.", 400
 
-    # 2) Validar usuario en BD
     today = date.today().isoformat()
     conn  = get_db_connection()
     try:
@@ -662,7 +730,6 @@ def start_session():
     if not active or not (start <= today <= end):
         return "Sin vigencia.", 403
 
-    # 3) Crear JWT válido 1h
     payload = {
         "name":     name,
         "email":    email,
@@ -672,11 +739,9 @@ def start_session():
     }
     token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG)
 
-    # 4) Redirigir al front con el token
     url = f"{FRONTEND_URL}/dashboard?auth={token}"
     print("DEBUG_REDIRECT ->", url, " | scenario:", scenario)
     return redirect(url, code=302)
-
 
 @app.route("/validate_user", methods=["POST"])
 def validate_user_endpoint():
@@ -745,30 +810,6 @@ def admin_recompute(session_id: int):
     return redirect("/admin")
 
 # ---------------- Dashboard API ----------------
-SENTINELS = ['Video_Not_Available_Error','Video_Processing_Failed','Video_Missing_Error']
-
-def jwt_required(f):
-    @wraps(f)
-    def _wrap(*args, **kwargs):
-        auth = request.headers.get("Authorization", "")
-        print(f"[🔐 DEBUG JWT] Authorization header completo: {auth!r}")
-        token = auth.split("Bearer ", 1)[1] if auth.startswith("Bearer ") else None
-        print(f"[🔐 DEBUG JWT] Token extraído: {token!r}")
-        if not token:
-            print("[🔐 DEBUG JWT ERROR] No se encontró token en la cabecera")
-            return jsonify(error="token faltante"), 401
-        try:
-            payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
-            print(f"[🔐 DEBUG JWT] jwt.decode OK → payload: {payload}")
-            request.jwt = payload
-        except Exception as e:
-            print(f"[🔐 DEBUG JWT ERROR] jwt.decode falló: {e}")
-            return jsonify(error="token inválido o usuario no autorizado"), 401
-        return f(*args, **kwargs)
-    return _wrap
-
-from flask_cors import cross_origin
-
 @app.get("/dashboard_data")
 @cross_origin()
 @jwt_required
@@ -924,7 +965,6 @@ def log_full_session():
         conn.commit()
         print(f"[DB] Sesión #{session_id} registrada correctamente.")
 
-        # Si tienes Celery:
         try:
             from celery_worker import process_session_transcript
             task_data = {
@@ -1012,24 +1052,66 @@ def admin_directory():
     rows = []
     try:
         with conn.cursor() as cur:
-            # Lista todos los usuarios y cuenta de videos/sesiones
+            # Trae usuarios + conteos + última interacción + pendientes
             cur.execute("""
+                WITH last_inter AS (
+                  SELECT email,
+                         MAX(timestamp) AS last_ts,
+                         COUNT(*) FILTER (
+                           WHERE COALESCE(evaluation_rh,'')='' OR visible_to_user IS NOT TRUE
+                         ) AS pend
+                  FROM interactions
+                  GROUP BY email
+                )
                 SELECT
                   u.name,
                   u.email,
                   COALESCE(COUNT(i.*), 0) AS sesiones,
-                  COALESCE(COUNT(NULLIF(i.audio_path, '')), 0) AS videos
+                  COALESCE(
+                    COUNT(*) FILTER (
+                      WHERE i.audio_path IS NOT NULL
+                        AND i.audio_path <> ''
+                        AND i.audio_path NOT IN (
+                          'Video_Not_Available_Error',
+                          'Video_Processing_Failed',
+                          'Video_Missing_Error'
+                        )
+                    ), 0
+                  ) AS videos,
+                  COALESCE(l.last_ts, NULL) AS last_ts,
+                  COALESCE(l.pend, 0) AS pending
                 FROM users u
                 LEFT JOIN interactions i ON i.email = u.email
-                GROUP BY u.name, u.email
+                LEFT JOIN last_inter l ON l.email = u.email
+                GROUP BY u.name, u.email, l.last_ts, l.pend
                 ORDER BY u.name ASC, u.email ASC;
             """)
-            rows = cur.fetchall()
+            base = cur.fetchall()
+
+            # KPIs y flag de nuevos
+            for name, email, sesiones, videos, last_ts, pending in base:
+                cur.execute("""
+                    SELECT evaluation_rh, timestamp
+                    FROM interactions
+                    WHERE email=%s
+                    ORDER BY timestamp DESC
+                    LIMIT 100
+                """, (email,))
+                evals = cur.fetchall()
+                kpis = []
+                recent_flag = False
+                for ev_raw, ts in evals:
+                    parsed = _parse_training_json(ev_raw)
+                    if parsed.get("kpi_avg") is not None:
+                        kpis.append(float(parsed["kpi_avg"]))
+                    if _is_recent(ts):
+                        recent_flag = True
+                avg_kpi = round(sum(kpis)/len(kpis), 2) if kpis else None
+                rows.append((name, email, sesiones, videos, last_ts, pending, recent_flag, avg_kpi))
     finally:
         conn.close()
 
     return render_template("admin_directory.html", rows=rows)
-
 
 @app.route("/admin-user/<path:email>", methods=["GET"])
 def admin_user(email):
@@ -1041,82 +1123,80 @@ def admin_user(email):
     sessions = []
     try:
         with conn.cursor() as cur:
-            # Nombre del usuario (si existe en tabla users)
             cur.execute("SELECT name FROM users WHERE email=%s", (email,))
             r = cur.fetchone()
             if r and r[0]:
                 user_name = r[0]
 
-            # Sesiones ordenadas (con comentarios públicos)
             cur.execute("""
                 SELECT
-                  i.id,
-                  i.scenario,
-                  i.timestamp,
-                  i.audio_path,
-                  i.evaluation,       -- resumen visible a usuario
-                  i.evaluation_rh,    -- mensaje de capacitación
-                  i.tip,
-                  i.visual_feedback,
-                  i.message,
-                  i.response,
-                  i.visible_to_user,
-                  COALESCE(
-                    (
-                      SELECT json_agg(
-                        json_build_object(
-                          'id', ic.id,
-                          'author', COALESCE(ic.author,'Capacitación'),
-                          'body', ic.body,
-                          'created', to_char(ic.created_at,'YYYY-MM-DD HH24:MI')
-                        )
-                      ORDER BY ic.created_at DESC)
-                      FROM interaction_comments ic
-                      WHERE ic.interaction_id = i.id
-                    ),
-                    '[]'::json
-                  ) AS comments_json
+                  i.id, i.scenario, i.timestamp, i.audio_path,
+                  i.evaluation, i.evaluation_rh, i.tip, i.visual_feedback,
+                  i.message, i.response, i.visible_to_user
                 FROM interactions i
                 WHERE i.email = %s
                 ORDER BY i.timestamp DESC NULLS LAST;
             """, (email,))
             raw = cur.fetchall()
 
-            # Normaliza message/response si vienen como JSON/texto
-            import json as _json
-            def _to_list(s):
+            def to_lines(s):
                 if not s: return []
                 try:
-                    v = _json.loads(s)
-                    if isinstance(v, list): return [str(x) for x in v if str(x).strip()]
+                    v = json.loads(s)
+                    if isinstance(v, list):
+                        return [str(x) for x in v if str(x).strip()]
                     return [str(v)]
                 except Exception:
                     return [x.strip() for x in str(s).splitlines() if x.strip()]
 
             for row in raw:
+                training = _parse_training_json(row[5])  # evaluation_rh
                 sessions.append({
                     "id": row[0],
                     "scenario": row[1],
                     "timestamp": row[2],
                     "audio_path": row[3] or "",
-                    "evaluation": row[4] or "",
-                    "evaluation_rh": row[5] or "",
+                    "evaluation": row[4] or "",          # resumen para usuario
+                    "evaluation_rh_raw": row[5] or "",   # texto/JSON original
+                    "training": training,                 # dict limpio para UI
                     "tip": row[6] or "",
                     "visual_feedback": row[7] or "",
-                    "user_dialogue": _to_list(row[8]),
-                    "avatar_dialogue": _to_list(row[9]),
+                    "user_dialogue": to_lines(row[8]),
+                    "avatar_dialogue": to_lines(row[9]),
                     "visible_to_user": bool(row[10]),
-                    "comments_public": row[11] or [],
                 })
     finally:
         conn.close()
 
-    return render_template(
-        "admin_user.html",
-        user_name=user_name,
-        email=email,
-        sessions=sessions
-    )
+    return render_template("admin_user.html", user_name=user_name, email=email, sessions=sessions)
+
+@app.route("/admin-user/<int:interaction_id>/save", methods=["POST"])
+def admin_save_feedback(interaction_id):
+    if not session.get("admin"):
+        return ("Forbidden", 403)
+
+    data = request.form
+    evaluation_rh = data.get("evaluation_rh","")
+    tip = data.get("tip","")
+    visual_feedback = data.get("visual_feedback","")
+    visible_to_user = True if data.get("send_to_user") == "on" else False
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE interactions
+                SET evaluation_rh=%s,
+                    tip=%s,
+                    visual_feedback=%s,
+                    visible_to_user=%s
+                WHERE id=%s
+            """, (evaluation_rh, tip, visual_feedback, visible_to_user, interaction_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+    return redirect(request.referrer or "/admin-directory")
 
 # ---------------- Health ----------------
 @app.route("/healthz")
