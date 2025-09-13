@@ -315,28 +315,99 @@ def issue_jwt(payload: dict, days: int = 7) -> str:
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG)
 
 def _parse_training_json(raw: str):
-    """Parsea el 'Mensaje de Capacitación' (JSON o texto) para la UI."""
+    """
+    Acepta el texto del 'Mensaje de Capacitación' (JSON o texto).
+    Devuelve un dict compacto para UI + campos 'legibles' para el box.
+    """
     if not raw:
         return {"is_json": False, "raw": ""}
+
+    import re
+    def _as_list(x):
+        if isinstance(x, list): return [str(i).strip() for i in x if str(i).strip()]
+        if isinstance(x, str) and x.strip(): return [x.strip()]
+        return []
+
     try:
         d = json.loads(raw)
+
+        # ---- fortalezas / oportunidades
+        strengths = d.get("compact", {}).get("strengths") or d.get("strengths") or []
+        opportunities = d.get("opportunities") or d.get("compact", {}).get("opportunities") or []
+
+        # ---- score 0-14
+        score14 = d.get("compact", {}).get("score_14") or d.get("score_14")
+        # intenta extraer de 'kpis' si viene como lista de strings: "Score 0–14: 6"
+        if score14 is None:
+            kpis = d.get("kpis")
+            if isinstance(kpis, list):
+                for s in kpis:
+                    m = re.search(r"Score\s*0\s*[-–—]\s*14\s*:\s*(\d+)", str(s))
+                    if m:
+                        score14 = int(m.group(1)); break
+
+        # ---- escucha activa (nivel)
+        listening = (d.get("interaction_quality") or {}).get("active_listening_level")
+        if not listening:
+            kpis = d.get("kpis")
+            if isinstance(kpis, list):
+                for s in kpis:
+                    m = re.search(r"Escucha\s+activa\s*:\s*([A-Za-zÁÉÍÓÚáéíóú]+)", str(s))
+                    if m:
+                        listening = m.group(1); break
+
+        # ---- señales / fases Da Vinci
+        dv_signals = None
+        steps = (d.get("da_vinci_step_flags") or {}).get("steps_applied_count")  # "2/5"
+        if isinstance(steps, str) and "/" in steps:
+            try:
+                dv_signals = int(steps.split("/")[0])
+            except Exception:
+                pass
+        if dv_signals is None:
+            kpis = d.get("kpis")
+            if isinstance(kpis, list):
+                for s in kpis:
+                    m = re.search(r"Fases?\s+Da\s+Vinci\s*:\s*(\d+)", str(s))
+                    if m:
+                        dv_signals = int(m.group(1)); break
+
+        # ---- coaching_3 / frases guía
+        coaching = _as_list(d.get("coaching_3") or d.get("coaching") or [])
+        frase = d.get("frase_guia") or d.get("frase_guía") or d.get("suggestion") or ""
+        rh_text = d.get("rh_text") or ""
+
         return {
             "is_json": True,
             "raw": d,
+
+            # datos base para otras vistas
             "summary": d.get("overall_training_summary") or "",
             "risk": d.get("compact", {}).get("risk") or d.get("risk"),
-            "strengths": d.get("compact", {}).get("strengths") or d.get("strengths") or [],
-            "opportunities": d.get("opportunities") or d.get("compact", {}).get("opportunities") or [],
-            "kpi_avg": (d.get("kpis") or {}).get("avg_score"),
+            "strengths": strengths,
+            "opportunities": opportunities,
+            "kpi_avg": (d.get("kpis") or {}).get("avg_score") if isinstance(d.get("kpis"), dict) else None,
             "product_score_total": d.get("product_score_total"),
+
             "da_vinci": {
                 "prep": (d.get("da_vinci_points") or {}).get("preparacion") or (d.get("da_vinci_points") or {}).get("preparación"),
                 "open": (d.get("da_vinci_points") or {}).get("apertura"),
                 "persuasion": (d.get("da_vinci_points") or {}).get("persuasion"),
                 "close": (d.get("da_vinci_points") or {}).get("cierre"),
             },
+
+            # ---- bloque 'legible' para el BOX
+            "readable": {
+                "score_14": score14,             # int o None
+                "listening": listening,           # 'Baja' / 'Media' / 'Alta' / None
+                "dv_signals": dv_signals,         # int o None
+                "coaching": coaching,             # list[str]
+                "frase": frase,                   # str
+                "rh_text": rh_text                # str (resumen RH si viene)
+            }
         }
     except Exception:
+        # No era JSON válido: lo devolvemos plano
         return {"is_json": False, "raw": raw}
 
 def _is_recent(ts, hours=36):

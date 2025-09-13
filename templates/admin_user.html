@@ -67,61 +67,109 @@
     {% endif %}
 
     {# ====== ANÁLISIS LEGIBLE (sin JSON crudo) ====== #}
-    <div class="section">
-      <strong>Mensaje de Capacitación</strong>
+    <div class="section" style="border:none;padding:0;background:transparent">
+  <!-- ===== BOX LEGIBLE (tipo tarjeta rosada) ===== -->
+  <div style="
+      background:#ffecec;
+      border:1px solid #f9c2c2;
+      border-left:6px solid #ef4444;
+      color:#3b0d0d;
+      border-radius:12px;
+      padding:14px 16px;
+      margin-bottom:12px;">
+    <div style="font-weight:800;margin-bottom:6px;">Análisis para Capacitación:</div>
+    <div style="margin-bottom:8px;">
+      <strong>{{ user_name }}</strong>
+      · Sesión: {{ s.timestamp or '—' }}
+      {% if s.training.readable.score_14 is not none %} · <strong>Score:</strong> {{ s.training.readable.score_14 }}/14{% endif %}
+      {% if s.training.risk %} · <strong>Riesgo:</strong> {{ s.training.risk }}{% endif %}
+    </div>
 
-      {% if s.training.is_json %}
-        {% if s.training.summary %}<p style="margin-top:6px">{{ s.training.summary }}</p>{% endif %}
+    {% if s.training.strengths and s.training.strengths|length>0 %}
+      <div><strong>Fortalezas:</strong> {{ s.training.strengths|join('; ') }}</div>
+    {% endif %}
 
-        <div class="grid-2">
-          <div>
-            <p><strong>Riesgo:</strong> {{ s.training.risk or 's/d' }}</p>
-            <p><strong>Promedio KPI:</strong> {{ s.training.kpi_avg if s.training.kpi_avg is not none else 's/d' }}</p>
-            <p><strong>Puntaje de producto:</strong> {{ s.training.product_score_total if s.training.product_score_total is not none else 's/d' }}</p>
-          </div>
-          <div>
-            <p><strong>Fases Da Vinci</strong>
-              <span class="chip">Prep: {{ s.training.da_vinci.prep or '—' }}</span>
-              <span class="chip">Apertura: {{ s.training.da_vinci.open or '—' }}</span>
-              <span class="chip">Persuasión: {{ s.training.da_vinci.persuasion or '—' }}</span>
-              <span class="chip">Cierre: {{ s.training.da_vinci.close or '—' }}</span>
-            </p>
-          </div>
+    {% if s.training.opportunities and s.training.opportunities|length>0 %}
+      <div><strong>Oportunidades:</strong> {{ s.training.opportunities|join('; ') }}</div>
+    {% endif %}
+
+    {% if s.training.readable.coaching and s.training.readable.coaching|length>0 %}
+      <div><strong>Coaching ({{ s.training.readable.coaching|length }}):</strong>
+        {{ s.training.readable.coaching|join('; ') }}
+      </div>
+    {% endif %}
+
+    {% if s.training.readable.frase %}
+      <div><strong>Frase guía:</strong> <em>{{ s.training.readable.frase }}</em></div>
+    {% endif %}
+
+    {% if s.training.readable.score_14 is not none or s.training.readable.listening or s.training.readable.dv_signals is not none %}
+      <div><strong>KPI:</strong>
+        {% if s.training.readable.score_14 is not none %}Score 0–14: {{ s.training.readable.score_14 }}{% endif %}
+        {% if s.training.readable.listening %}{{ ' · ' if s.training.readable.score_14 is not none else '' }}Escucha activa: {{ s.training.readable.listening }}{% endif %}
+        {% if s.training.readable.dv_signals is not none %}{{ ' · ' if s.training.readable.score_14 is not none or s.training.readable.listening else '' }}Fases Da Vinci: {{ s.training.readable.dv_signals }} señales{% endif %}
+      </div>
+    {% endif %}
+  </div>
+
+  <!-- ===== Mensaje de Capacitación (sección descriptiva + JSON opcional) ===== -->
+  <div class="section" style="margin-top:0">
+    <strong>Mensaje de Capacitación</strong>
+
+    {% if s.training.is_json %}
+      {% if s.training.summary %}<p style="margin-top:6px">{{ s.training.summary }}</p>{% endif %}
+
+      <div class="grid-2">
+        <div>
+          <p><strong>Riesgo:</strong> {{ s.training.risk or 's/d' }}</p>
+          <p><strong>Promedio KPI:</strong> {{ s.training.kpi_avg if s.training.kpi_avg is not none else 's/d' }}</p>
+          <p><strong>Puntaje de producto:</strong> {{ s.training.product_score_total if s.training.product_score_total is not none else 's/d' }}</p>
         </div>
+        <div>
+          <p><strong>Fases Da Vinci</strong>
+            <span class="chip">Prep: {{ s.training.da_vinci.prep or '—' }}</span>
+            <span class="chip">Apertura: {{ s.training.da_vinci.open or '—' }}</span>
+            <span class="chip">Persuasión: {{ s.training.da_vinci.persuasion or '—' }}</span>
+            <span class="chip">Cierre: {{ s.training.da_vinci.close or '—' }}</span>
+          </p>
+        </div>
+      </div>
 
-        {% if s.visual_feedback %}
-          <div class="section" style="margin-top:10px">
-            <strong>Imagen y postura</strong>
-            <p style="margin-top:6px">{{ s.visual_feedback }}</p>
-          </div>
-        {% endif %}
-
-        {% if s.training.strengths and s.training.strengths|length>0 %}
-          <div class="section good" style="margin-top:10px">
-            <strong>Fortalezas</strong>
-            <ul style="margin-top:6px">
-              {% for it in s.training.strengths %}<li>{{ it }}</li>{% endfor %}
-            </ul>
-          </div>
-        {% endif %}
-        {% if s.training.opportunities and s.training.opportunities|length>0 %}
-          <div class="section bad" style="margin-top:10px">
-            <strong>Oportunidades</strong>
-            <ul style="margin-top:6px">
-              {% for it in s.training.opportunities %}<li>{{ it }}</li>{% endfor %}
-            </ul>
-          </div>
-        {% endif %}
-      {% else %}
-        <p style="margin-top:6px">{{ s.evaluation_rh_raw or '—' }}</p>
+      {% if s.visual_feedback %}
+        <div class="section" style="margin-top:10px">
+          <strong>Imagen y postura</strong>
+          <p style="margin-top:6px">{{ s.visual_feedback }}</p>
+        </div>
       {% endif %}
 
-      <details style="margin-top:8px">
-        <summary>Ver JSON (opcional)</summary>
-        <p class="muted">Sólo si necesitas revisar el contenido crudo del análisis.</p>
-        <pre>{{ s.evaluation_rh_raw }}</pre>
-      </details>
-    </div>
+      {% if s.training.strengths and s.training.strengths|length>0 %}
+        <div class="section good" style="margin-top:10px">
+          <strong>Fortalezas</strong>
+          <ul style="margin-top:6px">
+            {% for it in s.training.strengths %}<li>{{ it }}</li>{% endfor %}
+          </ul>
+        </div>
+      {% endif %}
+      {% if s.training.opportunities and s.training.opportunities|length>0 %}
+        <div class="section bad" style="margin-top:10px">
+          <strong>Oportunidades</strong>
+          <ul style="margin-top:6px">
+            {% for it in s.training.opportunities %}<li>{{ it }}</li>{% endfor %}
+          </ul>
+        </div>
+      {% endif %}
+    {% else %}
+      <p style="margin-top:6px">{{ s.evaluation_rh_raw or '—' }}</p>
+    {% endif %}
+
+    <details style="margin-top:8px">
+      <summary>Ver JSON (opcional)</summary>
+      <p class="muted">Sólo si necesitas revisar el contenido crudo del análisis.</p>
+      <pre>{{ s.evaluation_rh_raw }}</pre>
+    </details>
+  </div>
+</div>
+
 
     {# ====== RESUMEN PARA USUARIO (auto) si existe ====== #}
     {% if s.evaluation %}
