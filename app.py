@@ -1000,6 +1000,124 @@ def publish_ai(sid: int):
     flash(f"Sesión {sid} publicada con análisis IA ✅", "success")
     return redirect(url_for("admin_panel"))
 
+# ─────────────────────────────────────────────────────────
+# Nuevo: Directorio administrativo "ligero"
+# ─────────────────────────────────────────────────────────
+@app.route("/admin-directory", methods=["GET"])
+def admin_directory():
+    if not session.get("admin"):
+        return redirect("/login")
+
+    conn = get_db_connection()
+    rows = []
+    try:
+        with conn.cursor() as cur:
+            # Lista todos los usuarios y cuenta de videos/sesiones
+            cur.execute("""
+                SELECT
+                  u.name,
+                  u.email,
+                  COALESCE(COUNT(i.*), 0) AS sesiones,
+                  COALESCE(COUNT(NULLIF(i.audio_path, '')), 0) AS videos
+                FROM users u
+                LEFT JOIN interactions i ON i.email = u.email
+                GROUP BY u.name, u.email
+                ORDER BY u.name ASC, u.email ASC;
+            """)
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    return render_template("admin_directory.html", rows=rows)
+
+
+@app.route("/admin-user/<path:email>", methods=["GET"])
+def admin_user(email):
+    if not session.get("admin"):
+        return redirect("/login")
+
+    conn = get_db_connection()
+    user_name = email
+    sessions = []
+    try:
+        with conn.cursor() as cur:
+            # Nombre del usuario (si existe en tabla users)
+            cur.execute("SELECT name FROM users WHERE email=%s", (email,))
+            r = cur.fetchone()
+            if r and r[0]:
+                user_name = r[0]
+
+            # Sesiones ordenadas (con comentarios públicos)
+            cur.execute("""
+                SELECT
+                  i.id,
+                  i.scenario,
+                  i.timestamp,
+                  i.audio_path,
+                  i.evaluation,       -- resumen visible a usuario
+                  i.evaluation_rh,    -- mensaje de capacitación
+                  i.tip,
+                  i.visual_feedback,
+                  i.message,
+                  i.response,
+                  i.visible_to_user,
+                  COALESCE(
+                    (
+                      SELECT json_agg(
+                        json_build_object(
+                          'id', ic.id,
+                          'author', COALESCE(ic.author,'Capacitación'),
+                          'body', ic.body,
+                          'created', to_char(ic.created_at,'YYYY-MM-DD HH24:MI')
+                        )
+                      ORDER BY ic.created_at DESC)
+                      FROM interaction_comments ic
+                      WHERE ic.interaction_id = i.id
+                    ),
+                    '[]'::json
+                  ) AS comments_json
+                FROM interactions i
+                WHERE i.email = %s
+                ORDER BY i.timestamp DESC NULLS LAST;
+            """, (email,))
+            raw = cur.fetchall()
+
+            # Normaliza message/response si vienen como JSON/texto
+            import json as _json
+            def _to_list(s):
+                if not s: return []
+                try:
+                    v = _json.loads(s)
+                    if isinstance(v, list): return [str(x) for x in v if str(x).strip()]
+                    return [str(v)]
+                except Exception:
+                    return [x.strip() for x in str(s).splitlines() if x.strip()]
+
+            for row in raw:
+                sessions.append({
+                    "id": row[0],
+                    "scenario": row[1],
+                    "timestamp": row[2],
+                    "audio_path": row[3] or "",
+                    "evaluation": row[4] or "",
+                    "evaluation_rh": row[5] or "",
+                    "tip": row[6] or "",
+                    "visual_feedback": row[7] or "",
+                    "user_dialogue": _to_list(row[8]),
+                    "avatar_dialogue": _to_list(row[9]),
+                    "visible_to_user": bool(row[10]),
+                    "comments_public": row[11] or [],
+                })
+    finally:
+        conn.close()
+
+    return render_template(
+        "admin_user.html",
+        user_name=user_name,
+        email=email,
+        sessions=sessions
+    )
+
 # ---------------- Health ----------------
 @app.route("/healthz")
 def health_check():
