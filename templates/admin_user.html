@@ -5,27 +5,37 @@
   <title>Ficha de {{ user_name }}</title>
   <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@600;700&family=Open+Sans:wght@400;600&display=swap" rel="stylesheet" />
   <style>
-    body{font-family:'Open Sans',sans-serif;background:#0c0e2c;color:#e6e8ef;margin:0}
+    :root{
+      --bg:#0c0e2c; --card:#ffffff; --ink:#1f2937; --muted:#64748b;
+      --line:#e5e7eb; --accent:#00bfff; --good:#065f46; --bad:#9a3412;
+      --chip:#eef6ff; --chip-line:#dbeafe; --chip-ink:#1e3a8a;
+      --good-bg:#ecfdf5; --good-line:#a7f3d0;
+      --bad-bg:#fff7ed; --bad-line:#fed7aa;
+    }
+    body{font-family:'Open Sans',sans-serif;background:var(--bg);color:#e6e8ef;margin:0}
     header{padding:16px 28px;background:linear-gradient(90deg,#0c0e2c,#003559 55%,#00bfff)}
     h1{font-family:'Montserrat',sans-serif;margin:0;font-weight:700}
     .container{max-width:1100px;margin:0 auto;padding:28px 22px}
-    .card{background:#fff;color:#222;border-radius:14px;box-shadow:0 10px 28px rgba(0,0,0,.2);padding:18px;margin-bottom:18px;border:1px solid #eef2f7}
-    .title{margin:0 0 8px;font:700 18px 'Montserrat',sans-serif;color:#0c0e2c}
-    .muted{color:#566}
-    .pill{display:inline-block;padding:4px 10px;border-radius:999px;background:#eef6ff;color:#1e3a8a;margin-left:8px;border:1px solid #dbeafe}
-    .pill.good{background:#ecfdf5;color:#065f46;border-color:#a7f3d0}
-    .pill.bad{background:#fff7ed;color:#9a3412;border-color:#fed7aa}
+    .card{background:var(--card);color:var(--ink);border-radius:14px;box-shadow:0 10px 28px rgba(0,0,0,.2);padding:18px;margin-bottom:18px;border:1px solid var(--line)}
+    .title{margin:0 0 6px;font:700 18px 'Montserrat',sans-serif;color:#0c0e2c}
+    .muted{color:var(--muted)}
+    .pill{display:inline-block;padding:4px 10px;border-radius:999px;background:var(--chip);color:var(--chip-ink);margin-left:8px;border:1px solid var(--chip-line)}
+    .pill.good{background:var(--good-bg);color:var(--good);border-color:var(--good-line)}
+    .pill.bad{background:var(--bad-bg);color:var(--bad);border-color:var(--bad-line)}
     .section{margin-top:10px;padding:12px;border-radius:12px;border:1px solid #e4ecff;background:#f8fbff}
-    .good{background:#ecfdf5;border-color:#a7f3d0}
-    .bad{background:#fff7ed;border-color:#fed7aa}
+    .good{background:var(--good-bg);border-color:var(--good-line)}
+    .bad{background:var(--bad-bg);border-color:var(--bad-line)}
     .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-    .pill-m{display:inline-block;padding:4px 10px;border-radius:999px;background:#eef6ff;color:#1e3a8a;margin:4px 6px 0 0;border:1px solid #dbeafe}
-    .btn{display:inline-block;background:#00bfff;color:#000;font-weight:700;padding:10px 14px;border-radius:10px;text-decoration:none;border:none;cursor:pointer}
-    .btn:hover{background:#00a4e6}
-    textarea{width:100%;padding:10px;border-radius:10px;border:1px solid #e5e7eb}
+    .chip{display:inline-block;padding:4px 10px;border-radius:999px;background:var(--chip);color:var(--chip-ink);margin:4px 6px 0 0;border:1px solid var(--chip-line)}
+    .btn{display:inline-block;background:var(--accent);color:#000;font-weight:700;padding:10px 14px;border-radius:10px;text-decoration:none;border:none;cursor:pointer}
+    .btn:hover{filter:brightness(.95)}
+    textarea{width:100%;padding:10px;border-radius:10px;border:1px solid var(--line);font-family:inherit}
     details summary{cursor:pointer}
-    pre{background:#f4f7ff;border:1px solid #e3e9ff;border-radius:10px;padding:12px;white-space:pre-wrap}
+    pre{background:#f4f7ff;border:1px solid #e3e9ff;border-radius:10px;padding:12px;white-space:pre-wrap;margin:0}
     .label{font-weight:700;margin:8px 0 6px;display:block}
+    ul.conv{list-style:disc;padding-left:22px;margin:8px 0}
+    ul.conv li{margin:6px 0}
+    .tag{font-weight:700}
   </style>
   <script>
     function syncButtonText(checkbox, btnId){
@@ -36,9 +46,10 @@
 </head>
 <body>
 <header><h1>👤 {{ user_name }} <span class="pill">{{ email }}</span></h1></header>
+
 <div class="container">
   {% if sessions|length == 0 %}
-    <p class="muted">Sin sesiones todavía.</p>
+    <div class="card"><p class="muted">Sin sesiones todavía.</p></div>
   {% endif %}
 
   {% for s in sessions %}
@@ -55,26 +66,36 @@
       </p>
     {% endif %}
 
-    {# ====== MENSAJE DE CAPACITACIÓN (solo lectura y lindo) ====== #}
+    {# ====== ANÁLISIS LEGIBLE (sin JSON crudo) ====== #}
     <div class="section">
       <strong>Mensaje de Capacitación</strong>
+
       {% if s.training.is_json %}
         {% if s.training.summary %}<p style="margin-top:6px">{{ s.training.summary }}</p>{% endif %}
+
         <div class="grid-2">
           <div>
             <p><strong>Riesgo:</strong> {{ s.training.risk or 's/d' }}</p>
             <p><strong>Promedio KPI:</strong> {{ s.training.kpi_avg if s.training.kpi_avg is not none else 's/d' }}</p>
-            <p><strong>Puntaje producto:</strong> {{ s.training.product_score_total if s.training.product_score_total is not none else 's/d' }}</p>
+            <p><strong>Puntaje de producto:</strong> {{ s.training.product_score_total if s.training.product_score_total is not none else 's/d' }}</p>
           </div>
           <div>
             <p><strong>Fases Da Vinci</strong>
-              <span class="pill-m">Prep: {{ s.training.da_vinci.prep or '—' }}</span>
-              <span class="pill-m">Apertura: {{ s.training.da_vinci.open or '—' }}</span>
-              <span class="pill-m">Persuasión: {{ s.training.da_vinci.persuasion or '—' }}</span>
-              <span class="pill-m">Cierre: {{ s.training.da_vinci.close or '—' }}</span>
+              <span class="chip">Prep: {{ s.training.da_vinci.prep or '—' }}</span>
+              <span class="chip">Apertura: {{ s.training.da_vinci.open or '—' }}</span>
+              <span class="chip">Persuasión: {{ s.training.da_vinci.persuasion or '—' }}</span>
+              <span class="chip">Cierre: {{ s.training.da_vinci.close or '—' }}</span>
             </p>
           </div>
         </div>
+
+        {% if s.visual_feedback %}
+          <div class="section" style="margin-top:10px">
+            <strong>Imagen y postura</strong>
+            <p style="margin-top:6px">{{ s.visual_feedback }}</p>
+          </div>
+        {% endif %}
+
         {% if s.training.strengths and s.training.strengths|length>0 %}
           <div class="section good" style="margin-top:10px">
             <strong>Fortalezas</strong>
@@ -96,55 +117,67 @@
       {% endif %}
 
       <details style="margin-top:8px">
-        <summary>Editar análisis (avanzado)</summary>
-        <p class="muted">Si necesitas corregir el análisis, edítalo aquí. Si no lo tocas, se mantiene igual.</p>
-        <textarea name="evaluation_rh" form="f{{ s.id }}" rows="8">{{ s.evaluation_rh_raw }}</textarea>
+        <summary>Ver JSON (opcional)</summary>
+        <p class="muted">Sólo si necesitas revisar el contenido crudo del análisis.</p>
+        <pre>{{ s.evaluation_rh_raw }}</pre>
       </details>
     </div>
 
-    {# ====== RESUMEN PÚBLICO YA CALCULADO (si existe) ====== #}
+    {# ====== RESUMEN PARA USUARIO (auto) si existe ====== #}
     {% if s.evaluation %}
       <div class="section">
-        <strong>Resumen para usuario (auto)</strong>
+        <strong>Resumen IA para el participante</strong>
         <p>{{ s.evaluation }}</p>
       </div>
     {% endif %}
 
-    {# ====== CONVERSACIÓN (como en admin viejo, bloques limpios) ====== #}
+    {# ====== CONVERSACIÓN: bullets alternando Usuario / Avatar ====== #}
     <div class="section">
       <strong>Conversación</strong>
-      <div class="grid-2" style="margin-top:8px">
-        <div>
-          <em>Usuario</em>
-          <pre>{{ s.user_dialogue|join('\n') }}</pre>
-        </div>
-        <div>
-          <em>Avatar</em>
-          <pre>{{ s.avatar_dialogue|join('\n') }}</pre>
-        </div>
-      </div>
+      {% set ulen = s.user_dialogue|length %}
+      {% set alen = s.avatar_dialogue|length %}
+      {% set total = ulen if ulen>alen else alen %}
+      <ul class="conv">
+        {% for i in range(total) %}
+          {% if i < ulen %}
+            <li><span class="tag">👤 Usuario:</span> {{ s.user_dialogue[i] }}</li>
+          {% endif %}
+          {% if i < alen %}
+            <li><span class="tag">🤖 Avatar:</span> {{ s.avatar_dialogue[i] }}</li>
+          {% endif %}
+        {% endfor %}
+      </ul>
     </div>
 
-    {# ====== FORMULARIO ÚNICO: FEEDBACK + ENVIAR ====== #}
+    {# ====== FORMULARIO: campo ÚNICO de retro + enviar ====== #}
     <form id="f{{ s.id }}" method="post" action="/admin-user/{{ s.id }}/save" class="section" style="background:#f7fbff">
-      <label class="label">Retroalimentación (único bloque que verá el usuario)</label>
-      <textarea name="feedback" rows="4" placeholder="Escribe aquí tu retro...">{% if s.visible_to_user %}{{ s.evaluation or s.evaluation_rh_raw or '' }}{% else %}{{ s.training.summary or '' }}{% endif %}</textarea>
+      <label class="label">Retroalimentación para el participante</label>
+      <textarea name="feedback" rows="5" placeholder="Escribe aquí la retro a enviar al participante…">{{ s.rh_comment or '' }}</textarea>
 
       <p style="margin-top:10px">
         <label><input type="checkbox" name="send_to_user" onchange="syncButtonText(this,'btn{{ s.id }}')" {% if s.visible_to_user %}checked{% endif %}/> Enviar al usuario</label>
-        <span class="muted">Si está marcado, la retro se publicará en el dashboard del participante.</span>
+        <span class="muted">Al marcar, la retro se publicará en el dashboard del participante.</span>
       </p>
 
-      <button id="btn{{ s.id }}" class="btn" type="submit">{% if s.visible_to_user %}Enviar al usuario{% else %}Guardar (solo interno){% endif %}</button>
+      <details style="margin:6px 0 12px">
+        <summary>Editar análisis (sólo si es necesario)</summary>
+        <textarea name="evaluation_rh" rows="8">{{ s.evaluation_rh_raw }}</textarea>
+      </details>
+
+      <button id="btn{{ s.id }}" class="btn" type="submit">
+        {% if s.visible_to_user %}Enviar al usuario{% else %}Guardar (solo interno){% endif %}
+      </button>
     </form>
   </div>
   {% endfor %}
 </div>
+
 <script>
-  // Ajusta el texto del botón en el primer render según el estado inicial
+  // Ajusta el texto del botón en el primer render
   document.querySelectorAll('input[name="send_to_user"]').forEach(cb => {
-    const btn = document.getElementById('btn' + cb.form.id.replace('f',''));
-    if (btn) { btn.textContent = cb.checked ? "Enviar al usuario" : "Guardar (solo interno)"; }
+    const id = cb.form.id.replace('f','');
+    const btn = document.getElementById('btn'+id);
+    if (btn) btn.textContent = cb.checked ? "Enviar al usuario" : "Guardar (solo interno)";
   });
 </script>
 </body>
