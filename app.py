@@ -416,7 +416,7 @@ def login():
     if request.method == "POST":
         if request.form["password"] == ADMIN_PASSWORD:
             session["admin"] = True
-            return redirect("/admin")
+            return redirect("/admin-directory")
         return "Contraseña incorrecta", 403
     return render_template("login.html")
 
@@ -1176,22 +1176,33 @@ def admin_save_feedback(interaction_id):
         return ("Forbidden", 403)
 
     data = request.form
-    evaluation_rh = data.get("evaluation_rh","")
-    tip = data.get("tip","")
-    visual_feedback = data.get("visual_feedback","")
-    visible_to_user = True if data.get("send_to_user") == "on" else False
+    # Opcional: editar el análisis (JSON o texto)
+    evaluation_rh = data.get("evaluation_rh", None)  # None ⇒ no tocar, string ⇒ actualizar
+    # Único campo de retroalimentación para enviar al usuario
+    feedback = data.get("feedback", "").strip()
+    send_to_user = (data.get("send_to_user") == "on")
+
+    sets = []
+    params = []
+
+    if evaluation_rh is not None:
+        sets.append("evaluation_rh=%s")
+        params.append(evaluation_rh)
+
+    # Unifica feedback en rh_comment
+    sets.append("rh_comment=%s")
+    params.append(feedback)
+
+    sets.append("visible_to_user=%s")
+    params.append(send_to_user)
+
+    sql = f"UPDATE interactions SET {', '.join(sets)} WHERE id=%s"
+    params.append(interaction_id)
 
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute("""
-                UPDATE interactions
-                SET evaluation_rh=%s,
-                    tip=%s,
-                    visual_feedback=%s,
-                    visible_to_user=%s
-                WHERE id=%s
-            """, (evaluation_rh, tip, visual_feedback, visible_to_user, interaction_id))
+            cur.execute(sql, tuple(params))
         conn.commit()
     finally:
         conn.close()

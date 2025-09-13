@@ -1,27 +1,38 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-<meta charset="utf-8" />
-<title>Ficha de {{ user_name }}</title>
-<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@600;700&family=Open+Sans:wght@400;600&display=swap" rel="stylesheet" />
-<style>
-  body{font-family:'Open Sans',sans-serif;background:#0c0e2c;color:#e6e8ef;margin:0}
-  header{padding:16px 28px;background:linear-gradient(90deg,#0c0e2c,#003559 55%,#00bfff)}
-  h1{font-family:'Montserrat',sans-serif;margin:0;font-weight:700}
-  .container{max-width:1100px;margin:0 auto;padding:28px 22px}
-  .card{background:#fff;color:#222;border-radius:14px;box-shadow:0 10px 28px rgba(0,0,0,.2);padding:18px;margin-bottom:18px;border:1px solid #eef2f7}
-  .title{margin:0 0 8px;font:700 18px 'Montserrat',sans-serif;color:#0c0e2c}
-  .muted{color:#566}
-  .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-  .pill{display:inline-block;padding:4px 10px;border-radius:999px;background:#eef6ff;color:#1e3a8a;margin:4px 6px 0 0;border:1px solid #dbeafe}
-  .section{margin-top:10px;padding:12px;border-radius:12px;border:1px solid #e4ecff;background:#f8fbff}
-  .bad{background:#fff7ed;border-color:#fed7aa}
-  .good{background:#ecfdf5;border-color:#a7f3d0}
-  .btn{display:inline-block;background:#00bfff;color:#000;font-weight:700;padding:8px 12px;border-radius:10px;text-decoration:none}
-  .btn:hover{background:#00a4e6}
-  textarea,input[type="text"]{width:100%;padding:10px;border-radius:10px;border:1px solid #e5e7eb}
-  label{font-weight:700}
-</style>
+  <meta charset="utf-8" />
+  <title>Ficha de {{ user_name }}</title>
+  <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@600;700&family=Open+Sans:wght@400;600&display=swap" rel="stylesheet" />
+  <style>
+    body{font-family:'Open Sans',sans-serif;background:#0c0e2c;color:#e6e8ef;margin:0}
+    header{padding:16px 28px;background:linear-gradient(90deg,#0c0e2c,#003559 55%,#00bfff)}
+    h1{font-family:'Montserrat',sans-serif;margin:0;font-weight:700}
+    .container{max-width:1100px;margin:0 auto;padding:28px 22px}
+    .card{background:#fff;color:#222;border-radius:14px;box-shadow:0 10px 28px rgba(0,0,0,.2);padding:18px;margin-bottom:18px;border:1px solid #eef2f7}
+    .title{margin:0 0 8px;font:700 18px 'Montserrat',sans-serif;color:#0c0e2c}
+    .muted{color:#566}
+    .pill{display:inline-block;padding:4px 10px;border-radius:999px;background:#eef6ff;color:#1e3a8a;margin-left:8px;border:1px solid #dbeafe}
+    .pill.good{background:#ecfdf5;color:#065f46;border-color:#a7f3d0}
+    .pill.bad{background:#fff7ed;color:#9a3412;border-color:#fed7aa}
+    .section{margin-top:10px;padding:12px;border-radius:12px;border:1px solid #e4ecff;background:#f8fbff}
+    .good{background:#ecfdf5;border-color:#a7f3d0}
+    .bad{background:#fff7ed;border-color:#fed7aa}
+    .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+    .pill-m{display:inline-block;padding:4px 10px;border-radius:999px;background:#eef6ff;color:#1e3a8a;margin:4px 6px 0 0;border:1px solid #dbeafe}
+    .btn{display:inline-block;background:#00bfff;color:#000;font-weight:700;padding:10px 14px;border-radius:10px;text-decoration:none;border:none;cursor:pointer}
+    .btn:hover{background:#00a4e6}
+    textarea{width:100%;padding:10px;border-radius:10px;border:1px solid #e5e7eb}
+    details summary{cursor:pointer}
+    pre{background:#f4f7ff;border:1px solid #e3e9ff;border-radius:10px;padding:12px;white-space:pre-wrap}
+    .label{font-weight:700;margin:8px 0 6px;display:block}
+  </style>
+  <script>
+    function syncButtonText(checkbox, btnId){
+      const btn = document.getElementById(btnId);
+      btn.textContent = checkbox.checked ? "Enviar al usuario" : "Guardar (solo interno)";
+    }
+  </script>
 </head>
 <body>
 <header><h1>👤 {{ user_name }} <span class="pill">{{ email }}</span></h1></header>
@@ -33,7 +44,10 @@
   {% for s in sessions %}
   <div class="card">
     <div class="title">{{ s.scenario or 'Sesión' }}</div>
-    <div class="muted">Fecha: {{ s.timestamp or '—' }} {% if s.visible_to_user %}<span class="pill good">Enviado al usuario</span>{% else %}<span class="pill bad">Pendiente enviar</span>{% endif %}</div>
+    <div class="muted">
+      Fecha: {{ s.timestamp or '—' }}
+      {% if s.visible_to_user %}<span class="pill good">Enviado al usuario</span>{% else %}<span class="pill bad">Pendiente enviar</span>{% endif %}
+    </div>
 
     {% if s.audio_path %}
       <p style="margin:10px 0">
@@ -41,12 +55,12 @@
       </p>
     {% endif %}
 
-    {# ====== BLOQUE: MENSAJE DE CAPACITACIÓN (limpio) ====== #}
+    {# ====== MENSAJE DE CAPACITACIÓN (solo lectura y lindo) ====== #}
     <div class="section">
       <strong>Mensaje de Capacitación</strong>
       {% if s.training.is_json %}
-        {% if s.training.summary %}<p>{{ s.training.summary }}</p>{% endif %}
-        <div class="grid">
+        {% if s.training.summary %}<p style="margin-top:6px">{{ s.training.summary }}</p>{% endif %}
+        <div class="grid-2">
           <div>
             <p><strong>Riesgo:</strong> {{ s.training.risk or 's/d' }}</p>
             <p><strong>Promedio KPI:</strong> {{ s.training.kpi_avg if s.training.kpi_avg is not none else 's/d' }}</p>
@@ -54,15 +68,15 @@
           </div>
           <div>
             <p><strong>Fases Da Vinci</strong>
-              <span class="pill">Prep: {{ s.training.da_vinci.prep or '—' }}</span>
-              <span class="pill">Apertura: {{ s.training.da_vinci.open or '—' }}</span>
-              <span class="pill">Persuasión: {{ s.training.da_vinci.persuasion or '—' }}</span>
-              <span class="pill">Cierre: {{ s.training.da_vinci.close or '—' }}</span>
+              <span class="pill-m">Prep: {{ s.training.da_vinci.prep or '—' }}</span>
+              <span class="pill-m">Apertura: {{ s.training.da_vinci.open or '—' }}</span>
+              <span class="pill-m">Persuasión: {{ s.training.da_vinci.persuasion or '—' }}</span>
+              <span class="pill-m">Cierre: {{ s.training.da_vinci.close or '—' }}</span>
             </p>
           </div>
         </div>
         {% if s.training.strengths and s.training.strengths|length>0 %}
-          <div class="section good">
+          <div class="section good" style="margin-top:10px">
             <strong>Fortalezas</strong>
             <ul style="margin-top:6px">
               {% for it in s.training.strengths %}<li>{{ it }}</li>{% endfor %}
@@ -70,69 +84,68 @@
           </div>
         {% endif %}
         {% if s.training.opportunities and s.training.opportunities|length>0 %}
-          <div class="section bad">
+          <div class="section bad" style="margin-top:10px">
             <strong>Oportunidades</strong>
             <ul style="margin-top:6px">
               {% for it in s.training.opportunities %}<li>{{ it }}</li>{% endfor %}
             </ul>
           </div>
         {% endif %}
-        <details style="margin-top:8px"><summary>Ver JSON completo</summary><pre style="white-space:pre-wrap">{{ s.evaluation_rh_raw }}</pre></details>
       {% else %}
-        <p>{{ s.evaluation_rh_raw or '—' }}</p>
+        <p style="margin-top:6px">{{ s.evaluation_rh_raw or '—' }}</p>
       {% endif %}
+
+      <details style="margin-top:8px">
+        <summary>Editar análisis (avanzado)</summary>
+        <p class="muted">Si necesitas corregir el análisis, edítalo aquí. Si no lo tocas, se mantiene igual.</p>
+        <textarea name="evaluation_rh" form="f{{ s.id }}" rows="8">{{ s.evaluation_rh_raw }}</textarea>
+      </details>
     </div>
 
-    {# ====== BLOQUE: RESUMEN PARA USUARIO (lo que ve el usuario) ====== #}
+    {# ====== RESUMEN PÚBLICO YA CALCULADO (si existe) ====== #}
     {% if s.evaluation %}
       <div class="section">
-        <strong>Resumen para usuario (visible en dashboard)</strong>
+        <strong>Resumen para usuario (auto)</strong>
         <p>{{ s.evaluation }}</p>
       </div>
     {% endif %}
 
-    {# ====== BLOQUE: CHAT LIMPIO ====== #}
+    {# ====== CONVERSACIÓN (como en admin viejo, bloques limpios) ====== #}
     <div class="section">
       <strong>Conversación</strong>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px">
+      <div class="grid-2" style="margin-top:8px">
         <div>
           <em>Usuario</em>
-          <ul>{% for line in s.user_dialogue %}<li>{{ line }}</li>{% endfor %}</ul>
+          <pre>{{ s.user_dialogue|join('\n') }}</pre>
         </div>
         <div>
           <em>Avatar</em>
-          <ul>{% for line in s.avatar_dialogue %}<li>{{ line }}</li>{% endfor %}</ul>
+          <pre>{{ s.avatar_dialogue|join('\n') }}</pre>
         </div>
       </div>
     </div>
 
-    {# ====== BLOQUE: FORM RETRO (admin escribe/revisa/envía) ====== #}
-    <form method="post" action="/admin-user/{{ s.id }}/save" class="section" style="background:#f7fbff">
-      <strong>Revisión y retroalimentación</strong>
-      <p class="muted" style="margin-top:6px">Edita y guarda. Marca “Enviar al usuario” para publicarlo en su dashboard.</p>
-
-      <label>Mensaje de Capacitación (JSON o texto)</label>
-      <textarea name="evaluation_rh" rows="6">{{ s.evaluation_rh_raw }}</textarea>
-
-      <div class="grid" style="margin-top:10px">
-        <div>
-          <label>Tip</label>
-          <input type="text" name="tip" value="{{ s.tip }}" />
-        </div>
-        <div>
-          <label>Feedback visual</label>
-          <input type="text" name="visual_feedback" value="{{ s.visual_feedback }}" />
-        </div>
-      </div>
+    {# ====== FORMULARIO ÚNICO: FEEDBACK + ENVIAR ====== #}
+    <form id="f{{ s.id }}" method="post" action="/admin-user/{{ s.id }}/save" class="section" style="background:#f7fbff">
+      <label class="label">Retroalimentación (único bloque que verá el usuario)</label>
+      <textarea name="feedback" rows="4" placeholder="Escribe aquí tu retro...">{% if s.visible_to_user %}{{ s.evaluation or s.evaluation_rh_raw or '' }}{% else %}{{ s.training.summary or '' }}{% endif %}</textarea>
 
       <p style="margin-top:10px">
-        <label><input type="checkbox" name="send_to_user" {% if s.visible_to_user %}checked{% endif %}/> Enviar al usuario</label>
+        <label><input type="checkbox" name="send_to_user" onchange="syncButtonText(this,'btn{{ s.id }}')" {% if s.visible_to_user %}checked{% endif %}/> Enviar al usuario</label>
+        <span class="muted">Si está marcado, la retro se publicará en el dashboard del participante.</span>
       </p>
 
-      <button class="btn" type="submit">💾 Guardar</button>
+      <button id="btn{{ s.id }}" class="btn" type="submit">{% if s.visible_to_user %}Enviar al usuario{% else %}Guardar (solo interno){% endif %}</button>
     </form>
   </div>
   {% endfor %}
 </div>
+<script>
+  // Ajusta el texto del botón en el primer render según el estado inicial
+  document.querySelectorAll('input[name="send_to_user"]').forEach(cb => {
+    const btn = document.getElementById('btn' + cb.form.id.replace('f',''));
+    if (btn) { btn.textContent = cb.checked ? "Enviar al usuario" : "Guardar (solo interno)"; }
+  });
+</script>
 </body>
 </html>
