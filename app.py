@@ -155,6 +155,13 @@ def log_request_info():
 
 app.config['UPLOAD_FOLDER'] = TEMP_PROCESSING_FOLDER
 
+def _guess_video_mime(key: str) -> str:
+    k = (key or "").lower()
+    if k.endswith(".webm"): return "video/webm"
+    if k.endswith(".mp4"):  return "video/mp4"
+    if k.endswith(".mov"):  return "video/quicktime"
+    return "video/mp4"
+
 # ---------------- DB bootstrap ----------------
 def init_db():
     conn = None
@@ -1209,47 +1216,92 @@ def admin_user(email):
             if r and r[0]:
                 user_name = r[0]
 
+            # 👇 añadí i.rh_comment al SELECT
             cur.execute("""
                 SELECT
                   i.id, i.scenario, i.timestamp, i.audio_path,
                   i.evaluation, i.evaluation_rh, i.tip, i.visual_feedback,
-                  i.message, i.response, i.visible_to_user
+                  i.message, i.response, i.visible_to_user, i.rh_comment
                 FROM interactions i
                 WHERE i.email = %s
                 ORDER BY i.timestamp DESC NULLS LAST;
             """, (email,))
             raw = cur.fetchall()
 
-            def to_lines(s):
-                if not s: return []
-                try:
-                    v = json.loads(s)
-                    if isinstance(v, list):
-                        return [str(x) for x in v if str(x).strip()]
-                    return [str(v)]
-                except Exception:
-                    return [x.strip() for x in str(s).splitlines() if x.strip()]
+        def to_lines(s):
+            if not s:
+                return []
+            try:
+                v = json.loads(s)
+                if isinstance(v, list):
+                    return [str(x).strip() for x in v if str(x).strip()]
+                v = str(v).strip()
+                return [v] if v else []
+            except Exception:
+                return [x.strip() for x in str(s).splitlines() if x.strip()]
 
-            for row in raw:
-                training = _parse_training_json(row[5])  # evaluation_rh
-                sessions.append({
-                    "id": row[0],
-                    "scenario": row[1],
-                    "timestamp": row[2],
-                    "audio_path": row[3] or "",
-                    "evaluation": row[4] or "",          # resumen para usuario
-                    "evaluation_rh_raw": row[5] or "",   # texto/JSON original
-                    "training": training,                 # dict limpio para UI
-                    "tip": row[6] or "",
-                    "visual_feedback": row[7] or "",
-                    "user_dialogue": to_lines(row[8]),
-                    "avatar_dialogue": to_lines(row[9]),
-                    "visible_to_user": bool(row[10]),
-                })
+        from os.path import basename
+
+        for row in raw:
+            training = _parse_training_json(row[5])  # evaluation_rh
+
+            # --- URLs presignadas para ver/descargar
+            key = (row[3] or "").strip()
+            video_url = ""
+            video_dl_url = ""
+            if key and key not in SENTINELS:
+                try:
+                    mime = _guess_video_mime(key)
+                    video_url = s3_client.generate_presigned_url(
+                        ClientMethod='get_object',
+                        Params={
+                            'Bucket': AWS_S3_BUCKET_NAME,
+                            'Key': key,
+                            'ResponseContentType': mime,
+                        },
+                        ExpiresIn=3600
+                    )
+                    video_dl_url = s3_client.generate_presigned_url(
+                        ClientMethod='get_object',
+                        Params={
+                            'Bucket': AWS_S3_BUCKET_NAME,
+                            'Key': key,
+                            'ResponseContentDisposition': f'attachment; filename="{basename(key)}"',
+                        },
+                        ExpiresIn=3600
+                    )
+                except Exception:
+                    video_url = ""
+                    video_dl_url = ""
+
+            sessions.append({
+                "id": row[0],
+                "scenario": row[1],
+                "timestamp": row[2],
+                "audio_path": key,
+                "video_url": video_url,
+                "video_dl_url": video_dl_url,
+                "evaluation": row[4] or "",
+                "evaluation_rh_raw": row[5] or "",
+                "training": training,
+                "tip": row[6] or "",
+                "visual_feedback": row[7] or "",
+                "user_dialogue": to_lines(row[8]),
+                "avatar_dialogue": to_lines(row[9]),
+                "visible_to_user": bool(row[10]),
+                "rh_comment": row[11] or "",   # 👈 ahora sí lo mandamos a la plantilla
+            })
     finally:
         conn.close()
 
+    # Oculta sesiones sin conversación
+    sessions = [
+        s for s in sessions
+        if (len(s.get("user_dialogue", [])) + len(s.get("avatar_dialogue", []))) > 0
+    ]
+
     return render_template("admin_user.html", user_name=user_name, email=email, sessions=sessions)
+
 
 @app.route("/admin-user/<int:interaction_id>/save", methods=["POST"])
 def admin_save_feedback(interaction_id):

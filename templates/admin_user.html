@@ -60,19 +60,35 @@
       {% if s.visible_to_user %}<span class="pill good">Enviado al usuario</span>{% else %}<span class="pill bad">Pendiente enviar</span>{% endif %}
     </div>
 
-    {% if s.audio_path %}
-      <p style="margin:10px 0">
-        <a class="btn" href="/video/{{ s.audio_path|e }}" target="_blank">▶ Ver video</a>
-      </p>
+    {% if s.video_url %}
+      <div class="section" style="background:#0b0b0b;border-color:#1f2937">
+        <strong style="color:#e5e7eb">Video</strong>
+        <video
+          controls
+          preload="metadata"
+          playsinline
+          style="width:100%;max-height:420px;margin-top:8px;border-radius:12px;background:#000"
+          controlslist="nodownload"
+        >
+          <source src="{{ s.video_url }}">
+          Tu navegador no soporta video embebido.
+          <a href="{{ s.video_url }}" target="_blank" rel="noopener">Abrir video</a>
+        </video>
+
+        <div style="margin-top:10px; display:flex; gap:10px; flex-wrap:wrap">
+          <a class="btn" href="{{ s.video_url }}" target="_blank" rel="noopener">▶ Ver en pestaña nueva</a>
+          {% if s.video_dl_url %}
+            <a class="btn" href="{{ s.video_dl_url }}">⬇ Descargar video</a>
+          {% endif %}
+        </div>
+      </div>
     {% endif %}
 
     <!-- ====== ANÁLISIS LEGIBLE (sin JSON crudo) ====== -->
     <div class="section" style="border:none;padding:0;background:transparent">
-
-      {# Alias seguro para evitar fallos si 'readable' no existe #}
       {% set r = s.training.get('readable', {'score_14': None, 'listening': None, 'dv_signals': None, 'coaching': [], 'frase': '', 'rh_text': ''}) %}
 
-      <!-- ===== BOX LEGIBLE (tipo tarjeta rosada) ===== -->
+      <!-- ===== BOX LEGIBLE ===== -->
       <div style="
           background:#ffecec;
           border:1px solid #f9c2c2;
@@ -114,7 +130,7 @@
         {% endif %}
       </div>
 
-      <!-- ===== Mensaje de Capacitación (sección descriptiva + JSON opcional) ===== -->
+      <!-- ===== Mensaje de Capacitación ===== -->
       <div class="section" style="margin-top:0">
         <strong>Mensaje de Capacitación</strong>
 
