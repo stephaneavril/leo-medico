@@ -330,6 +330,34 @@ export default function DashboardClient({
                 <h3>{r.scenario}</h3>
                 <div className="muted">Fecha: {r.created_at}</div>
 
+                {r.video_s3 && (
+                 <div style={{ marginTop: 12 }}>
+                  <p className="muted" style={{ marginBottom: 6 }}>
+                    <strong>Tu video</strong> (revisión de la sesión)
+                  </p>
+                  <video
+                    src={r.video_s3}
+                    controls
+                    playsInline
+                    preload="metadata"
+                    style={{
+                      width: '100%',
+                      maxWidth: 720,
+                      height: 'auto',
+                      borderRadius: 12,
+                      border: '1px solid #e6eaf5',
+                      boxShadow: '0 6px 16px rgba(0,0,0,0.10)',
+                      background: '#000'
+                    }}
+                  />
+                  <div style={{ marginTop: 6 }}>
+                    <a href={r.video_s3} target="_blank" rel="noreferrer">
+                      Descargar / abrir en pestaña nueva
+                    </a>
+                  </div>
+                </div>
+              )}
+
                 {r.coach_advice && (
                   <div className="evaluation-box">
                     <p style={{ marginTop: 0, marginBottom: 8 }}>
