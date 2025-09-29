@@ -29,7 +29,7 @@ load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 _openai = OpenAI(api_key=OPENAI_API_KEY) if (OPENAI_API_KEY and OpenAI) else None
 
-EVAL_VERSION = "LEO-eval-v3.2"  # 🔸sube la versión para verificar en logs/JSON
+EVAL_VERSION = "LEO-eval-v3.3"  # ↑ sube la versión para verificar en logs/JSON
 print(f"[EVAL] Loaded evaluator version: {EVAL_VERSION}")
 
 # ───────────────────────── Utils ─────────────────────────
@@ -173,7 +173,7 @@ PRODUCT_RUBRIC: Dict[str, Dict[str, List[str] | int]] = {
             "esperar por lo menos 30min", "esperar 60min", "esperar 1hr",
             "liquido a temperatura ambiente y en estado gel a temperatura corporal",
             "formar un gel en el esofago",
-             "un sobre despues de cada comida", "un sobre antes de dormir",
+            "un sobre despues de cada comida", "un sobre antes de dormir",
         ],
     },
     "diferenciales": {
@@ -184,6 +184,51 @@ PRODUCT_RUBRIC: Dict[str, Dict[str, List[str] | int]] = {
         ],
     },
     "mensajes_base": {"weight": 1, "phrases": ["esoxx-one", "reflujo", "erge", "sintomas"]},
+}
+
+# ─────────── Da Vinci CHECKLIST (PASO 2–4) ───────────
+# Cada sub-ítem se evalúa por presencia (1 punto) con fuzzy matching.
+DA_VINCI_CHECKLIST = {
+    "apertura": {  # PASO 2
+        "vinculo_seguimiento": [
+            "retomar la visita pasada", "dar seguimiento a la visita",
+            "seguimiento de la visita anterior", "como le fue con", "desde la ultima vez"
+        ],
+        "perfil_paciente_preguntas": [
+            "caracteristicas de sus pacientes", "que caracteristicas tienen sus pacientes",
+            "necesidades del paciente", "perfil del paciente", "como describe a sus pacientes"
+        ],
+    },
+    "persuasion": {  # PASO 3
+        "preguntas_objetivos_tratamiento": [
+            "objetivos de tratamiento", "que busca en un tratamiento",
+            "criterios ideales", "metas clinicas", "que espera del tratamiento"
+        ],
+        "materiales_y_evidencia": [
+            "materiales promocionales", "estudio", "evidencia", "datos clinicos",
+            "argumento cientifico", "publicacion", "referencia clinica"
+        ],
+        "resolucion_objeciones": [
+            "objecion", "preocupacion", "duda", "reserva", "entiendo su preocupacion",
+            "si entiendo bien", "parafraseando"
+        ],
+    },
+    "cierre": {  # PASO 4
+        "parafraseo_y_resumen_beneficios": [
+            "parafrase", "si entiendo bien", "lo que mas le interesa es",
+            "resume beneficios", "con base a lo dialogado"
+        ],
+        "mensajes_clave": [
+            "mensaje clave", "puntos clave", "en resumen", "lo mas importante"
+        ],
+        "solicitud_inclusion_y_pasos": [
+            "le parece si iniciamos", "podemos acordar un siguiente paso",
+            "puedo contar con", "paciente candidato", "proxima visita", "seguimiento en"
+        ],
+        "promociones_vigentes": [
+            "promocion", "descuento", "oferta en farmacia", "condiciones comerciales"
+        ],
+    },
 }
 
 # ─────────── Scorers ───────────
@@ -251,6 +296,43 @@ def interaction_quality(t: str) -> Dict[str, object]:
         "objection_handling_signal": objections,
         "active_listening_level": listen_level,
     }
+
+def score_da_vinci_checklist(t: str) -> dict:
+    """
+    Devuelve un dict con:
+      {
+        'apertura': {'total': int, 'hits': {subitem: [frases_detectadas]}},
+        'persuasion': {...}, 'cierre': {...},
+        'totales': {'apertura': X, 'persuasion': Y, 'cierre': Z, 'global': X+Y+Z, 'max': MAX}
+      }
+    """
+    nt = canonicalize_products(normalize(t))
+    out = {}
+    global_total = 0
+    global_max = 0
+
+    for paso, items in DA_VINCI_CHECKLIST.items():
+        paso_total = 0
+        paso_max = 0
+        hits_map = {}
+        for subitem, phrases in items.items():
+            paso_max += 1
+            sub_hits = [p for p in phrases if fuzzy_contains(nt, p, 0.80)]
+            if sub_hits:
+                paso_total += 1
+            hits_map[subitem] = sub_hits
+        out[paso] = {"total": paso_total, "hits": hits_map, "max": paso_max}
+        global_total += paso_total
+        global_max += paso_max
+
+    out["totales"] = {
+        "apertura": out["apertura"]["total"],
+        "persuasion": out["persuasion"]["total"],
+        "cierre": out["cierre"]["total"],
+        "global": global_total,
+        "max": global_max,
+    }
+    return out
 
 # ─────────── Visual express ───────────
 
@@ -388,7 +470,6 @@ def _build_compact(user_text: str, internal: dict) -> dict:
         f"Coaching: {', '.join(coaching_3)}."
     )
 
-    # Este campo se llena más adelante con IA (o fallback)
     analysis_ia = internal.get("compact", {}).get("analysis_ia", "")
 
     user_text_summary = (
@@ -405,7 +486,7 @@ def _build_compact(user_text: str, internal: dict) -> dict:
         "frase_guia": frase_guia,
         "kpis": kpis,
         "rh_text": rh_text,
-        "analysis_ia": analysis_ia,   # ⬅️ frase corta para RH
+        "analysis_ia": analysis_ia,
         "user_text": user_text_summary,
     }
 
@@ -459,6 +540,17 @@ def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str
     davinci_pts = score_davinci_points(user_text)
     legacy_8    = kw_score(user_text)
 
+    # Checklist Da Vinci PASO 2–4 (Apertura, Persuasión, Cierre)
+    davinci_check = score_da_vinci_checklist(user_text)
+
+    # KPI de fases (0–10)
+    if davinci_check["totales"]["max"] > 0:
+        kpi_fases_0_10 = round(
+            10.0 * davinci_check["totales"]["global"] / davinci_check["totales"]["max"], 1
+        )
+    else:
+        kpi_fases_0_10 = 0.0
+
     # Calidad + producto
     iq = interaction_quality(user_text)
     prod_detail, prod_total = product_compliance(user_text)
@@ -510,15 +602,12 @@ def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str
         except Exception:
             level = "error"
 
-    # Fallbacks (breves, no genéricos) si la IA no respondió
+    # Fallbacks si la IA no respondió
     if not gpt_public:
         tail = "Asegura un cierre con acuerdo y fecha." if not iq.get("closing_present") else "Buen cierre; agenda seguimiento específico."
         gpt_public = (
-            "¡Muy buen ejercicio! Destacaste el hilo clínico y explicaste bien el mecanismo. "
-            "Se notó tu conocimiento clínico y la seguridad con la que comunicaste. "
-            "Buen tono y enfoque clínico. Refuerza la evidencia con 2–3 frases de estudio y vincula el beneficio al caso del médico. "
-            "integra evidencia breve (ej. 2 semanas vs 4 con IBP) y resalta el beneficio nocturno "
-            "y refuerza el beneficio nocturno (barrera bioadhesiva). " 
+            "Buen ejercicio: mantuviste el hilo clínico y explicaste el mecanismo con claridad. "
+            "Refuerza evidencia con 2–3 frases de estudio y vincula el beneficio al caso del médico. "
             + tail
         )
     if not analysis_ia:
@@ -530,7 +619,7 @@ def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str
         else:
             analysis_ia = "Desempeño sólido: buen hilo clínico y señales de cierre; mantener consistencia."
 
-    # KPIs cualitativos simples (para kpis numéricos ya calculados)
+    # KPIs cualitativos simples
     MAP_Q2N = {"Excelente": 3, "Bien": 2, "Necesita Mejora": 1}
     qualitative = {
         "preparacion": "Bien" if sales_model_flags["preparacion"] else "Necesita Mejora",
@@ -563,6 +652,9 @@ def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str
         "product_claims": {"detail": prod_detail, "product_score_total": prod_total},
         "interaction_quality": iq,
 
+        # Checklist Da Vinci PASO 2–4
+        "davinci_checklist": davinci_check,
+
         "active_listening_simple_detection": iq["active_listening_level"],
         "disqualifying_phrases_detected": disq_flag(user_text),
 
@@ -572,12 +664,20 @@ def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str
             "avg_phase_score_1_3": avg_phase_score_1_3,
             "avg_steps_pct": steps_applied_pct,
             "legacy_count": legacy_8,
+
+            # KPIs nuevos del checklist
+            "fases_checklist_0_10": kpi_fases_0_10,
+            "fases_checklist_detalle": {
+                "apertura": f"{davinci_check['apertura']['total']}/{davinci_check['apertura']['max']}",
+                "persuasion": f"{davinci_check['persuasion']['total']}/{davinci_check['persuasion']['max']}",
+                "cierre": f"{davinci_check['cierre']['total']}/{davinci_check['cierre']['max']}",
+            },
         }
     }
 
     # Compacto dinámico para Admin/RH + frase IA
     internal_summary["compact"] = _build_compact(user_text, internal_summary)
-    internal_summary["compact"]["analysis_ia"] = analysis_ia  # ⬅️ aquí se agrega
+    internal_summary["compact"]["analysis_ia"] = analysis_ia
     internal_summary["eval_version"] = EVAL_VERSION
 
     # Público (feedback motivador y específico para el PARTICIPANTE)
@@ -587,28 +687,24 @@ def evaluate_interaction(user_text: str, leo_text: str, video_path: Optional[str
     coaching     = "; ".join(compact.get("coaching_3", [])[:2]) or "prepara 3 preguntas de apertura y define un cierre concreto"
     kpi_line     = " · ".join(compact.get("kpis", [])[:2])
 
+    paso_line = (
+        f"Apertura {davinci_check['apertura']['total']}/{davinci_check['apertura']['max']} · "
+        f"Persuasión {davinci_check['persuasion']['total']}/{davinci_check['persuasion']['max']} · "
+        f"Cierre {davinci_check['cierre']['total']}/{davinci_check['cierre']['max']}"
+    )
+
     public_block = textwrap.dedent(f"""
         {gpt_public}
 
         Fortalezas: {dyn_strength}
         Oportunidades: {dyn_opps}
         Recomendación: {coaching}
-        KPI: {kpi_line}
+        KPI: {kpi_line} · Fases: {paso_line}
     """).strip()
 
     return {"public": public_block, "internal": internal_summary, "level": level}
 
 # ─────────── Persistencia ───────────
-
-def get_db_connection():
-    database_url = os.getenv("DATABASE_URL")
-    if not database_url:
-        raise ValueError("DATABASE_URL environment variable is not set!")
-    parsed = urlparse(database_url)
-    return psycopg2.connect(
-        database=parsed.path[1:], user=parsed.username, password=parsed.password,
-        host=parsed.hostname, port=parsed.port, sslmode="require",
-    )
 
 def evaluate_and_persist(session_id: int, user_text: str, leo_text: str, video_path: Optional[str] = None) -> Dict[str, object]:
     result = evaluate_interaction(user_text, leo_text, video_path)
@@ -618,7 +714,7 @@ def evaluate_and_persist(session_id: int, user_text: str, leo_text: str, video_p
     try:
         conn = get_db_connection()
         with conn.cursor() as cur:
-            # 🔸 Guardamos RH (JSON) y el resumen público (para el cuadro azul)
+            # Guardamos RH (JSON) y el resumen público (para el cuadro azul)
             cur.execute(
                 "UPDATE interactions SET evaluation_rh = %s, evaluation = %s WHERE id = %s",
                 (json.dumps(internal, ensure_ascii=False), result.get("public", ""), int(session_id))
