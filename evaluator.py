@@ -29,7 +29,7 @@ load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 _openai = OpenAI(api_key=OPENAI_API_KEY) if (OPENAI_API_KEY and OpenAI) else None
 
-EVAL_VERSION = "LEO-eval-v3.3"  # ↑ sube la versión para verificar en logs/JSON
+EVAL_VERSION = "LEO-eval-v3.4"  # ↑ sube la versión para verificar en logs/JSON
 print(f"[EVAL] Loaded evaluator version: {EVAL_VERSION}")
 
 # ───────────────────────── Utils ─────────────────────────
@@ -44,17 +44,36 @@ def normalize(txt: str) -> str:
     return t
 
 def canonicalize_products(nt: str) -> str:
-    """Normaliza variantes del producto a 'esoxx-one' (tolerante a ASR)."""
-    variants = [
+    """
+    Normaliza variantes ASR de marcas / productos a formas canónicas.
+    Mantiene compatibilidad con Esoxx-ONE y añade Sinair.
+    """
+    t = nt
+
+    # ===== Esoxx-ONE (existente) =====
+    esoxx_variants = [
         r"\beso\s*xx\s*one\b", r"\besox+\s*one\b", r"\besoxx-one\b",
         r"\besof+\s*one\b", r"\becox+\s*one\b", r"\besox+\b", r"\besof+\b",
         r"\becox+\b", r"\beso\s*xx\b", r"\besoxxone\b", r"\besoft\s*one\b",
         r"\bays?oks?\b", r"\bays?oks?\s*one\b", r"\besok+\b",
     ]
-    canon = nt
-    for pat in variants:
-        canon = re.sub(pat, "esoxx-one", canon)
-    return canon
+    for pat in esoxx_variants:
+        t = re.sub(pat, "esoxx-one", t)
+
+    # ===== Sinair (nuevo) =====
+    sinair_variants = [
+        r"\bsinair\b", r"\bsina(ir)?\b", r"\bsinayr\b", r"\bzinair\b",
+        r"\bsin er\b", r"\bsinairr\b", r"\bsh?inair\b", r"\bsina?r\b",
+    ]
+    for pat in sinair_variants:
+        t = re.sub(pat, "sinair", t)
+
+    # Términos técnicos frecuentes (robustece matching)
+    t = re.sub(r"\b[aá]lfa\s+galactosidasa\b", "alfa galactosidasa", t)
+    t = re.sub(r"\bbeta\s+galactosidasa\b", "beta galactosidasa", t)
+    t = re.sub(r"\bfodmaps?\b", "fodmaps", t)
+
+    return t
 
 def fuzzy_contains(haystack: str, needle: str, threshold: float = 0.82) -> bool:
     if not needle:
@@ -74,6 +93,7 @@ def count_fuzzy_any(nt: str, phrases: List[str], thr: float = 0.82) -> int:
 
 # ─────────── Scoring config (claims + Da Vinci) ───────────
 
+# (Existente) Esoxx-ONE
 WEIGHTED_KWS = {
     "3pt": [
         "esoxx-one mejora hasta 90% todos los sintomas de la erge",
@@ -111,6 +131,26 @@ WEIGHTED_KWS = {
     ],
 }
 
+# (Nuevo) Sinair — frases ponderadas
+WEIGHTED_KWS_SINAIR = {
+    "3pt": [
+        "sinair es un suplemento alimenticio unico a base de dos enzimas naturales alfa galactosidasa y beta galactosidasa",
+        "alfa galactosidasa y beta galactosidasa contribuyen a disminuir la formacion de gases intestinales por fermentacion bacteriana de carbohidratos y lactosa",
+        "reduce molestias derivadas de intolerancias alimentarias y produccion de gas",
+    ],
+    "2pt": [
+        "mejora la digestion",
+        "incrementa el aprovechamiento de los alimentos",
+    ],
+    "1pt": [
+        "sinair",
+        "enzimas naturales",
+        "mejora la calidad de vida de los pacientes",
+        "alternativa air free",
+        "air free",
+    ],
+}
+
 DAVINCI_POINTS = {
     "preparacion": {
         2: ["objetivo smart", "mi objetivo hoy es", "metas smart"],
@@ -121,7 +161,15 @@ DAVINCI_POINTS = {
         1: ["buenos dias", "buen dia", "hola doctora", "mi nombre es", "como ha estado", "gracias por su tiempo"],
     },
     "persuasion": {
-        2: ["que caracteristicas considera ideales", "objetivos de tratamiento", "combinado con ibp", "sinergia con inhibidores de la bomba de protones", "mecanismo", "beneficio", "evidencia", "estudio", "tres componentes", "acido hialuronico", "condroitin", "poloxamero",  "que esquema de tratamiento normalmente utiliza", "que busca en un tratamiento ideal"],
+        2: [
+            "que caracteristicas considera ideales", "objetivos de tratamiento",
+            "combinado con ibp", "sinergia con inhibidores de la bomba de protones",
+            "mecanismo", "beneficio", "evidencia", "estudio",
+            "tres componentes", "acido hialuronico", "condroitin", "poloxamero",
+            "que esquema de tratamiento normalmente utiliza", "que busca en un tratamiento ideal",
+            # (refuerzo para enzimas / intolerancias)
+            "enzimas digestivas", "intolerancias alimentarias", "fodmaps",
+        ],
     },
     "cierre": {
         2: ["con base a lo dialogado considera que esoxx-one", "que fue lo que mas le atrajo de esoxx-one", "podria empezar con algun paciente", "le parece si iniciamos", "ya tiene en mente algun paciente para iniciar", "empezar a considerar algun paciente", "podemos acordar un siguiente paso", "puedo contar con su apoyo"],
@@ -133,13 +181,16 @@ DAVINCI_POINTS = {
     },
 }
 
-KW_LIST = ["beneficio", "estudio", "sintoma", "tratamiento", "reflujo", "mecanismo", "eficacia", "seguridad"]
+KW_LIST = ["beneficio", "estudio", "sintoma", "tratamiento", "reflujo", "mecanismo", "eficacia", "seguridad",
+           # refuerzos para Sinair
+           "enzima", "enzimas", "galactosidasa", "fodmaps", "intolerancia", "lactosa", "oligosacaridos"]
 BAD_PHRASES = ["no se", "no tengo idea", "lo invente", "no lo estudie", "no estudie bien", "no conozco", "no me acuerdo"]
 LISTEN_KW  = [
     "entiendo", "comprendo", "veo que", "lo que dices", "si entiendo bien", "parafraseando",
     "que le preocupa", "me gustaria conocer", "que caracteristicas tienen", "podria contarme", "como describe a sus pacientes"
 ]
 
+# (Existente) Esoxx-ONE
 PRODUCT_RUBRIC: Dict[str, Dict[str, List[str] | int]] = {
     "mecanismo": {
         "weight": 2,
@@ -184,6 +235,38 @@ PRODUCT_RUBRIC: Dict[str, Dict[str, List[str] | int]] = {
         ],
     },
     "mensajes_base": {"weight": 1, "phrases": ["esoxx-one", "reflujo", "erge", "sintomas"]},
+}
+
+# (Nuevo) Sinair
+PRODUCT_RUBRIC_SINAIR: Dict[str, Dict[str, List[str] | int]] = {
+    "sinair_mecanismo": {
+        "weight": 2,
+        "phrases": [
+            "alfa galactosidasa", "beta galactosidasa",
+            "disminuyen gases intestinales", "disminuye la formacion de gases",
+            "fermentacion bacteriana de carbohidratos y lactosa",
+            "enzimas digestivas", "hipersensibilidad a oligosacaridos", "fodmaps",
+        ],
+    },
+    "sinair_eficacia": {
+        "weight": 3,
+        "phrases": [
+            "reduce molestias derivadas de intolerancias alimentarias",
+            "reduccion de produccion de gas", "mejora la digestion",
+            "incrementa el aprovechamiento de los alimentos",
+        ],
+    },
+    "sinair_diferenciales": {
+        "weight": 1,
+        "phrases": [
+            "suplemento alimenticio unico", "enzimas naturales",
+            "alternativa air free", "mejora la calidad de vida de los pacientes",
+        ],
+    },
+    "sinair_mensajes_base": {
+        "weight": 1,
+        "phrases": ["sinair", "enzimas", "enzimas digestivas", "enzimatico"],
+    },
 }
 
 # ─────────── Da Vinci CHECKLIST (PASO 2–4) ───────────
@@ -233,10 +316,16 @@ DA_VINCI_CHECKLIST = {
 
 # ─────────── Scorers ───────────
 
+def _iter_weighted_phrase_buckets():
+    # Prioriza las llaves numéricas 3pt→2pt→1pt y fusiona Esoxx + Sinair
+    buckets = ["3pt", "2pt", "1pt"]
+    for bk in buckets:
+        yield bk, (WEIGHTED_KWS.get(bk, []) + WEIGHTED_KWS_SINAIR.get(bk, []))
+
 def score_weighted_phrases(t: str) -> Dict[str, object]:
     nt = canonicalize_products(normalize(t))
     breakdown, total = [], 0
-    for pts_key, phrases in WEIGHTED_KWS.items():
+    for pts_key, phrases in _iter_weighted_phrase_buckets():
         pts = int(re.sub(r"[^0-9]", "", pts_key) or "0")
         for p in phrases:
             if fuzzy_contains(nt, p, 0.80):
@@ -267,9 +356,15 @@ def disq_flag(t: str) -> bool:
 
 def product_compliance(t: str) -> Tuple[Dict[str, dict], int]:
     nt = canonicalize_products(normalize(t))
+
+    # Combina ambas rúbricas (Esoxx + Sinair) sin romper claves previas
+    combined_rubric = {}
+    combined_rubric.update(PRODUCT_RUBRIC)
+    combined_rubric.update(PRODUCT_RUBRIC_SINAIR)
+
     detail: Dict[str, dict] = {}
     total = 0
-    for cat, cfg in PRODUCT_RUBRIC.items():
+    for cat, cfg in combined_rubric.items():
         weight: int = int(cfg["weight"])
         hits = [p for p in cfg["phrases"] if fuzzy_contains(nt, p, 0.80)]
         score = weight if hits else 0
