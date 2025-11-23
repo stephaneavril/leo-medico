@@ -104,8 +104,8 @@ function InteractiveSessionContent() {
   const firstUserTurnFallbackRef = useRef(false); // ← fallback del primer turno
   const lastAvatarTTSAtRef = useRef<number>(0);
 
-  const recordingTimerRef = useRef<number>(480);
-  const [timerDisplay, setTimerDisplay] = useState('08:00');
+  const recordingTimerRef = useRef<number>(300);
+  const [timerDisplay, setTimerDisplay] = useState('05:00');
   const messagesRef = useRef<any[]>([]);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordedChunks = useRef<Blob[]>([]);
@@ -207,7 +207,7 @@ function InteractiveSessionContent() {
           .filter((m) => m.sender === MessageSender.AVATAR)
           .map((m) => m.content)
           .join('\n');
-        const duration = 480 - recordingTimerRef.current;
+        const duration = 300 - recordingTimerRef.current;
         const flaskApiUrl = process.env.NEXT_PUBLIC_FLASK_API_URL || '';
 
         try {
