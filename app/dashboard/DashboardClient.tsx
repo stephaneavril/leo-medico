@@ -287,12 +287,11 @@ export default function DashboardClient({
           <section className="howto-box">
             <h3>Cómo aprovechar a Leo en 7 pasos</h3>
             <ol>
-              <li>Haz clic en el escenario. </li>
-              <li>Activa cámara y micrófono; debes tener un internet estable y de preferencia usar audifonos.</li>
+              <li>Haz clic en el botón INICIAR. </li>
+              <li>Activa cámara y micrófono; debes tener un internet estable y de preferencia usar audífonos.</li>
               <li>Haz clic en <strong>Iniciar</strong> y saluda al avatar con “Buenos días, Doctora o Buenos días Doctor”.</li>
-              <li>Expón tu objetivo (p. ej., beneficio, evidencia, o cierre de la visita).</li>
               <li>Aplica el modelo Da Vinci y aborda objeciones brevemente.</li>
-              <li>Dispones de 5 minutos por sesión y 30 minutos al mes.</li>
+              <li>Dispones de 5 minutos por sesión y 15 minutos al mes.</li>
               <li>Al terminar, haz clic en finalizar. De no hacerlo no se registra tu sesión. Capacitación revisará con IA y publicará tu resumen para la siguiente práctica.</li>
             </ol>
           </section>
